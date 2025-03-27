@@ -45,20 +45,18 @@ class WarehouseApp:
             self.notebook = ttk.Notebook(root)
             self.notebook.pack(fill=BOTH, expand=True)
             
-            if self.can_access_invoices:
-                self.create_invoice_tab()
-            
+            # Создаем вкладки в нужном порядке
             if self.can_access_warehouse:
                 self.create_warehouse_tab()
-            
+                
+            if self.can_access_invoices:
+                self.create_invoice_tab()
+                
             if self.can_access_counteragents:
                 self.create_counteragent_tab()
-            
+                
             if self.can_access_employees:
                 self.create_employee_tab()
-            
-            if self.can_access_details:
-                self.create_details_tab()
                 
         except psycopg2.Error as e:
             print(f"[TRANSACTION ERROR] Initialization failed: {e}")
@@ -189,12 +187,20 @@ class WarehouseApp:
                 ("Добавить накладную", self.add_invoice),
                 ("Изменить накладную", self.edit_invoice),
                 ("Удалить накладную", self.delete_invoice),
-                ((None, None))  # разделитель
+                (None, None)  # разделитель
             ])
         elif self.can_update_invoice_status:
-            menu_items.append(("Обновить статус", self.update_invoice_status))
+            menu_items.extend([
+                ("Обновить статус", self.update_invoice_status),
+                (None, None)  # разделитель
+            ])
         
-        menu_items.append(("Обновить список", self.load_invoices))
+        # Добавляем пункт поиска для всех пользователей
+        menu_items.extend([
+            ("Найти накладную", self.search_invoice),
+            (None, None),  # разделитель
+            ("Обновить список", self.load_invoices)
+        ])
         
         self.invoice_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.invoice_tree, menu_items))
         self.invoice_tree.bind("<Delete>", lambda e: self.delete_invoice())
@@ -284,9 +290,13 @@ class WarehouseApp:
                 (None, None)  # разделитель
             ])
         
-        menu_items.append(("Обновить список", self.load_warehouse))
+        # Добавляем пункт поиска для всех пользователей
+        menu_items.extend([
+            ("Найти деталь", self.search_warehouse_item),
+            (None, None),  # разделитель
+            ("Обновить список", self.load_warehouse)
+        ])
         
-        # Исправленный bind (убедитесь, что menu_items правильно сформирован)
         self.warehouse_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.warehouse_tree, menu_items))
         self.warehouse_tree.bind("<Delete>", lambda e: self.delete_warehouse_item())
         
@@ -381,54 +391,6 @@ class WarehouseApp:
         # Загрузка данных
         self.load_employees()
     
-    def create_details_tab(self):
-        """Создание вкладки для работы с деталями"""
-        tab = Frame(self.notebook)
-        self.notebook.add(tab, text="Детали")
-        
-        # Таблица деталей
-        self.details_tree = ttk.Treeview(tab, columns=("ID", "Тип", "Вес", "Полка", "Стеллаж", "Комната", "Склад"), show="headings")
-        
-        self.details_tree.heading("ID", text="ID")
-        self.details_tree.heading("Тип", text="Тип детали")
-        self.details_tree.heading("Вес", text="Вес (кг)")
-        self.details_tree.heading("Полка", text="Полка")
-        self.details_tree.heading("Стеллаж", text="Стеллаж")
-        self.details_tree.heading("Комната", text="Комната")
-        self.details_tree.heading("Склад", text="Склад")
-        
-        self.details_tree.column("ID", width=50)
-        self.details_tree.column("Тип", width=200)
-        self.details_tree.column("Вес", width=80)
-        self.details_tree.column("Полка", width=80)
-        self.details_tree.column("Стеллаж", width=80)
-        self.details_tree.column("Комната", width=80)
-        self.details_tree.column("Склад", width=80)
-        
-        scroll = ttk.Scrollbar(tab, command=self.details_tree.yview)
-        scroll.pack(side=RIGHT, fill=Y)
-        self.details_tree.configure(yscrollcommand=scroll.set)
-        
-        self.details_tree.pack(fill=BOTH, expand=True)
-        
-        # Контекстное меню
-        menu_items = []
-        if self.can_edit_details:
-            menu_items.extend([
-                ("Добавить деталь", self.add_detail),
-                ("Изменить деталь", self.edit_detail),
-                ("Удалить деталь", self.delete_detail),
-                (None, None)  # разделитель
-            ])
-        
-        menu_items.append(("Обновить список", self.load_details))
-        
-        self.details_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.details_tree, menu_items))
-        self.details_tree.bind("<Delete>", lambda e: self.delete_detail())
-        
-        # Загрузка данных
-        self.load_details()
-    
     # Методы загрузки данных
     def load_invoices(self):
         """Загрузка данных о накладных с использованием представления"""
@@ -474,7 +436,7 @@ class WarehouseApp:
                     type_detail,
                     weight
                 FROM warehouse_details_view
-                ORDER BY warehouse_number, room_number, rack_number, shelf_number
+                ORDER BY detail_id, warehouse_number, room_number, rack_number, shelf_number
             """)
             
             for row in self.cursor.fetchall():
@@ -513,35 +475,162 @@ class WarehouseApp:
         except Exception as e:
             self.status_bar.config(text=f"Ошибка: {str(e)}")
     
-    def load_details(self):
-        """Загрузка данных о деталях"""
-        try:
-            self.details_tree.delete(*self.details_tree.get_children())
-            self.cursor.execute("""
-                SELECT 
-                    d.detail_id,
-                    d.type_detail,
-                    d.weight,
-                    s.shelf_number,
-                    rk.rack_number,
-                    r.room_number,
-                    w.warehouse_number
-                FROM details d
-                JOIN shelf s ON d.shelfid = s.shelf_id
-                JOIN rack rk ON s.rackid = rk.rack_id
-                JOIN room r ON rk.roomid = r.room_id
-                JOIN warehouse w ON r.warehouseid = w.warehouse_id
-                ORDER BY d.detail_id
-            """)
-            
-            for row in self.cursor.fetchall():
-                self.details_tree.insert("", END, values=row)
-            
-            self.status_bar.config(text="Детали загружены")
-        except Exception as e:
-            self.status_bar.config(text=f"Ошибка: {str(e)}")
-    
     # Методы для работы с накладными
+    def search_invoice(self):
+        """Поиск накладных по различным критериям"""
+        # Сохраняем текущие данные перед поиском
+        current_data = []
+        for item in self.invoice_tree.get_children():
+            current_data.append(self.invoice_tree.item(item)['values'])
+        
+        search_window = Toplevel(self.root)
+        search_window.title("Поиск накладных")
+        
+        # Создаем элементы формы для поиска
+        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
+        
+        # ID накладной
+        Label(search_window, text="ID накладной:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        id_var = StringVar()
+        id_entry = Entry(search_window, textvariable=id_var)
+        id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Контрагент
+        Label(search_window, text="Контрагент:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
+        counteragent_var = StringVar()
+        counteragent_entry = Entry(search_window, textvariable=counteragent_var)
+        counteragent_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
+        
+        Label(search_window, text="Дата (ГГГГ-ММ-ДД):").grid(row=3, column=0, padx=5, pady=5, sticky=W)
+        date_from_var = StringVar()
+        date_from_entry = Entry(search_window, textvariable=date_from_var)
+        date_from_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Тип накладной
+        Label(search_window, text="Тип накладной:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
+        type_var = StringVar()
+        type_combobox = ttk.Combobox(search_window, textvariable=type_var, 
+                                    values=["", "Отгрузка", "Выгрузка"])
+        type_combobox.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Статус
+        Label(search_window, text="Статус:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
+        status_var = StringVar()
+        status_combobox = ttk.Combobox(search_window, textvariable=status_var, 
+                                    values=["", "В процессе", "Завершено"])
+        status_combobox.grid(row=6, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Деталь
+        Label(search_window, text="Деталь:").grid(row=7, column=0, padx=5, pady=5, sticky=W)
+        detail_var = StringVar()
+        detail_entry = Entry(search_window, textvariable=detail_var)
+        detail_entry.grid(row=7, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Ответственный
+        Label(search_window, text="Ответственный:").grid(row=8, column=0, padx=5, pady=5, sticky=W)
+        responsible_var = StringVar()
+        responsible_entry = Entry(search_window, textvariable=responsible_var)
+        responsible_entry.grid(row=8, column=1, padx=5, pady=5, sticky=EW)
+        
+        def perform_search():
+            try:
+                # Собираем условия для запроса
+                conditions = []
+                params = []
+                
+                if id_var.get():
+                    conditions.append("invoice_id = %s")
+                    params.append(int(id_var.get()))
+                
+                if counteragent_var.get():
+                    conditions.append("counteragent_name ILIKE %s")
+                    params.append(f"%{counteragent_var.get()}%")
+                
+                if date_from_var.get():
+                    conditions.append("date_time >= %s")
+                    params.append(date_from_var.get())
+                
+                if type_var.get():
+                    conditions.append("type_invoice_text = %s")
+                    params.append(type_var.get())
+                
+                if status_var.get():
+                    conditions.append("status_text = %s")
+                    params.append(status_var.get())
+                
+                if detail_var.get():
+                    conditions.append("type_detail ILIKE %s")
+                    params.append(f"%{detail_var.get()}%")
+                
+                if responsible_var.get():
+                    conditions.append("""
+                        (responsible_last_name ILIKE %s OR 
+                        responsible_first_name ILIKE %s OR 
+                        COALESCE(responsible_patronymic, '') ILIKE %s)
+                    """)
+                    params.extend([
+                        f"%{responsible_var.get()}%",
+                        f"%{responsible_var.get()}%",
+                        f"%{responsible_var.get()}%"
+                    ])
+                
+                # Формируем SQL запрос
+                query = """
+                    SELECT 
+                        invoice_id,
+                        counteragent_name,
+                        date_time,
+                        type_invoice_text,
+                        status_text,
+                        type_detail,
+                        quantity,
+                        responsible_last_name || ' ' || 
+                        responsible_first_name || ' ' || 
+                        COALESCE(responsible_patronymic, '') as responsible
+                    FROM invoice_details_view
+                """
+                
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                
+                query += " ORDER BY invoice_id"
+                
+                # Выполняем запрос
+                self.invoice_tree.delete(*self.invoice_tree.get_children())
+                self.cursor.execute(query, params)
+                
+                found_items = self.cursor.fetchall()
+                
+                if not found_items:
+                    messagebox.showinfo("Информация", "Накладные не найдены")
+                    # Восстанавливаем исходные данные
+                    self.invoice_tree.delete(*self.invoice_tree.get_children())
+                    for row in current_data:
+                        self.invoice_tree.insert("", END, values=row)
+                    return
+                
+                for row in found_items:
+                    self.invoice_tree.insert("", END, values=row)
+                
+                found_count = len(found_items)
+                self.status_bar.config(text=f"Найдено накладных: {found_count}")
+                search_window.destroy()
+                
+            except ValueError as ve:
+                messagebox.showerror("Ошибка", f"Некорректные данные: {str(ve)}")
+            except Exception as e:
+                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
+                self.conn.rollback()
+                # Восстанавливаем исходные данные при ошибке
+                self.invoice_tree.delete(*self.invoice_tree.get_children())
+                for row in current_data:
+                    self.invoice_tree.insert("", END, values=row)
+        
+        Button(search_window, text="Найти", command=perform_search).grid(
+            row=9, column=0, padx=5, pady=10, sticky=EW)
+        Button(search_window, text="Сбросить", command=self.load_invoices).grid(
+            row=9, column=1, padx=5, pady=10, sticky=EW)
+    
     def add_invoice(self):
         """Добавление новой накладной с проверкой прав"""
         if not self.can_edit_invoices:
@@ -557,7 +646,15 @@ class WarehouseApp:
             counteragent_names = [f"{id}: {name}" for id, name in counteragents]
             
             # Получаем список деталей
-            self.cursor.execute("SELECT detail_id, type_detail FROM details")
+            self.cursor.execute("""
+                                SELECT detail_id, 
+                                    CONCAT(type_detail, ' (Склад: ', warehouse_number, 
+                                            ', Комната: ', room_number, 
+                                            ', Стеллаж: ', rack_number, 
+                                            ', Полка: ', shelf_number, ')') AS detail_info
+                                FROM warehouse_details_view
+                                ORDER BY type_detail
+                            """)
             details = self.cursor.fetchall()
             detail_names = [f"{id}: {name}" for id, name in details]
             
@@ -696,7 +793,15 @@ class WarehouseApp:
             counteragents = self.cursor.fetchall()
             counteragent_names = [f"{id}: {name}" for id, name in counteragents]
             
-            self.cursor.execute("SELECT detail_id, type_detail FROM details")
+            self.cursor.execute("""
+                                SELECT detail_id, 
+                                    CONCAT(type_detail, ' (Склад: ', warehouse_number, 
+                                            ', Комната: ', room_number, 
+                                            ', Стеллаж: ', rack_number, 
+                                            ', Полка: ', shelf_number, ')') AS detail_info
+                                FROM warehouse_details_view
+                                ORDER BY type_detail
+                            """)
             details = self.cursor.fetchall()
             detail_names = [f"{id}: {name}" for id, name in details]
             
@@ -829,6 +934,154 @@ class WarehouseApp:
                 messagebox.showerror("Ошибка", f"Не удалось удалить накладную: {str(e)}")
     
     # Методы для работы со складом
+    def search_warehouse_item(self):
+        """Поиск деталей на складе по различным критериям"""
+        # Сохраняем текущие данные перед поиском
+        current_data = []
+        for item in self.warehouse_tree.get_children():
+            current_data.append(self.warehouse_tree.item(item)['values'])
+        
+        search_window = Toplevel(self.root)
+        search_window.title("Поиск деталей на складе")
+        
+        # Создаем элементы формы для поиска
+        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
+        
+        # Тип детали
+        Label(search_window, text="Тип детали:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        type_var = StringVar()
+        type_entry = Entry(search_window, textvariable=type_var)
+        type_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Номер склада
+        Label(search_window, text="Номер склада:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
+        warehouse_var = StringVar()
+        warehouse_entry = Entry(search_window, textvariable=warehouse_var)
+        warehouse_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Номер комнаты
+        Label(search_window, text="Номер комнаты:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
+        room_var = StringVar()
+        room_entry = Entry(search_window, textvariable=room_var)
+        room_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Номер стеллажа
+        Label(search_window, text="Номер стеллажа:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
+        rack_var = StringVar()
+        rack_entry = Entry(search_window, textvariable=rack_var)
+        rack_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Номер полки
+        Label(search_window, text="Номер полки:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
+        shelf_var = StringVar()
+        shelf_entry = Entry(search_window, textvariable=shelf_var)
+        shelf_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Вес (от и до)
+        Label(search_window, text="Вес от:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
+        weight_from_var = StringVar()
+        weight_from_entry = Entry(search_window, textvariable=weight_from_var)
+        weight_from_entry.grid(row=6, column=1, padx=5, pady=5, sticky=EW)
+        
+        Label(search_window, text="Вес до:").grid(row=7, column=0, padx=5, pady=5, sticky=W)
+        weight_to_var = StringVar()
+        weight_to_entry = Entry(search_window, textvariable=weight_to_var)
+        weight_to_entry.grid(row=7, column=1, padx=5, pady=5, sticky=EW)
+        
+        def perform_search():
+            try:
+                # Собираем условия для запроса
+                conditions = []
+                params = []
+                
+                if type_var.get():
+                    conditions.append("type_detail ILIKE %s")
+                    params.append(f"%{type_var.get()}%")
+                
+                if warehouse_var.get():
+                    conditions.append("warehouse_number = %s")
+                    params.append(warehouse_var.get())
+                
+                if room_var.get():
+                    conditions.append("room_number = %s")
+                    params.append(room_var.get())
+                
+                if rack_var.get():
+                    conditions.append("rack_number = %s")
+                    params.append(rack_var.get())
+                
+                if shelf_var.get():
+                    conditions.append("shelf_number = %s")
+                    params.append(shelf_var.get())
+                
+                if weight_from_var.get():
+                    try:
+                        weight_from = float(weight_from_var.get())
+                        conditions.append("weight >= %s")
+                        params.append(weight_from)
+                    except ValueError:
+                        messagebox.showwarning("Предупреждение", "Некорректное значение веса 'от'")
+                
+                if weight_to_var.get():
+                    try:
+                        weight_to = float(weight_to_var.get())
+                        conditions.append("weight <= %s")
+                        params.append(weight_to)
+                    except ValueError:
+                        messagebox.showwarning("Предупреждение", "Некорректное значение веса 'до'")
+                
+                # Формируем SQL запрос
+                query = """
+                    SELECT 
+                        detail_id,
+                        warehouse_number,
+                        room_number,
+                        rack_number,
+                        shelf_number,
+                        type_detail,
+                        weight
+                    FROM warehouse_details_view
+                """
+                
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                
+                query += " ORDER BY detail_id, warehouse_number, room_number, rack_number, shelf_number"
+                
+                # Выполняем запрос
+                self.warehouse_tree.delete(*self.warehouse_tree.get_children())
+                self.cursor.execute(query, params)
+                
+                found_items = self.cursor.fetchall()
+                
+                if not found_items:
+                    messagebox.showinfo("Информация", "Детали не найдены")
+                    # Восстанавливаем исходные данные
+                    self.warehouse_tree.delete(*self.warehouse_tree.get_children())
+                    for row in current_data:
+                        self.warehouse_tree.insert("", END, values=row)
+                    return
+                
+                for row in found_items:
+                    self.warehouse_tree.insert("", END, values=row)
+                
+                found_count = len(found_items)
+                self.status_bar.config(text=f"Найдено деталей: {found_count}")
+                search_window.destroy()
+                
+            except Exception as e:
+                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
+                self.conn.rollback()
+                # Восстанавливаем исходные данные при ошибке
+                self.warehouse_tree.delete(*self.warehouse_tree.get_children())
+                for row in current_data:
+                    self.warehouse_tree.insert("", END, values=row)
+        
+        Button(search_window, text="Найти", command=perform_search).grid(
+            row=8, column=0, padx=5, pady=10, sticky=EW)
+        Button(search_window, text="Сбросить", command=self.load_warehouse).grid(
+            row=8, column=1, padx=5, pady=10, sticky=EW)
+    
     def add_warehouse_item(self):
         if not self.can_edit_warehouse:
             messagebox.showerror("Ошибка", "У вас нет прав на добавление деталей")
@@ -886,10 +1139,6 @@ class WarehouseApp:
                 shelf_options = [f"{number}" for id, number in shelves]
                 shelf_ids = {number: id for id, number in shelves}
 
-            # Получаем список типов деталей
-            self.cursor.execute("SELECT DISTINCT type_detail FROM details ORDER BY type_detail")
-            detail_types = [row[0] for row in self.cursor.fetchall()]
-
             # Создаем элементы формы
             row = 0
             
@@ -933,14 +1182,10 @@ class WarehouseApp:
                 shelf_combobox.current(0)
             row += 1
 
-            # Тип детали (выпадающий список)
+            # Тип детали (поле ввода)
             Label(add_window, text="Тип детали:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
-            type_var = StringVar()
-            type_combobox = ttk.Combobox(add_window, textvariable=type_var, 
-                                        values=detail_types)
-            type_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
-            if detail_types:
-                type_combobox.current(0)
+            type_entry = Entry(add_window)
+            type_entry.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
 
             # Вес (поле ввода)
@@ -1019,24 +1264,42 @@ class WarehouseApp:
                     # Проверяем, что все поля заполнены
                     if not all([warehouse_var.get(), room_var.get(), 
                             rack_var.get(), shelf_var.get(), 
-                            type_var.get(), weight_entry.get()]):
+                            type_entry.get(), weight_entry.get()]):
                         raise ValueError("Все поля должны быть заполнены")
 
-                    # Получаем ID полки
-                    shelf_number = shelf_var.get()
-                    if shelf_number not in shelf_ids:
-                        raise ValueError("Неверный номер полки")
-                    shelf_id = shelf_ids[shelf_number]
+                    # Получаем ID полки (проверяем её существование)
+                    self.cursor.execute("""
+                        SELECT shelf_id FROM shelf 
+                        WHERE shelf_number = %s AND rackid = (
+                            SELECT rack_id FROM rack 
+                            WHERE rack_number = %s AND roomid = (
+                                SELECT room_id FROM room 
+                                WHERE room_number = %s AND warehouseid = (
+                                    SELECT warehouse_id FROM warehouse 
+                                    WHERE warehouse_number = %s
+                                )
+                            )
+                        )
+                    """, (shelf_var.get(), rack_var.get(), room_var.get(), warehouse_var.get()))
+                    
+                    shelf_data = self.cursor.fetchone()
+                    if not shelf_data:
+                        raise ValueError("Полка не найдена в базе данных")
+                    shelf_id = shelf_data[0]
 
-                    # Получаем тип детали и вес
-                    type_detail = type_var.get()
-                    weight = float(weight_entry.get())
+                    # Проверяем вес
+                    try:
+                        weight = float(weight_entry.get())
+                        if weight <= 0.0:
+                            raise ValueError("Вес не может быть отрицательным")
+                    except ValueError as e:
+                        raise ValueError("Вес должен быть числом (например, 2.1)")
 
                     # Вставляем деталь
                     self.cursor.execute("""
                         INSERT INTO details (shelfid, type_detail, weight)
                         VALUES (%s, %s, %s)
-                    """, (shelf_id, type_detail, weight))
+                    """, (shelf_id, type_entry.get(), weight))
                     
                     self.conn.commit()
                     self.load_warehouse()
@@ -1047,6 +1310,7 @@ class WarehouseApp:
                 except Exception as e:
                     self.conn.rollback()
                     messagebox.showerror("Ошибка", f"Не удалось добавить деталь: {str(e)}")
+                    print(f"[DEBUG] Ошибка: {e}")  # Для отладки
             
             # Кнопка сохранения
             Button(add_window, text="Сохранить", command=save_item).grid(
@@ -1054,7 +1318,7 @@ class WarehouseApp:
                 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось открыть форму: {str(e)}")
-    
+
     def edit_warehouse_item(self):
         """Редактирование детали на складе с выпадающими списками"""
         if not self.can_edit_warehouse:
@@ -1254,11 +1518,28 @@ class WarehouseApp:
                             type_var.get(), weight_entry.get()]):
                         raise ValueError("Все поля должны быть заполнены")
                     
-                    # Получаем ID полки
+                    # Получаем ID полки из выбранного значения
                     shelf_number = shelf_var.get()
-                    if shelf_number not in shelf_ids:
-                        raise ValueError("Неверный номер полки")
-                    shelf_id = shelf_ids[shelf_number]
+                    
+                    # Находим ID полки по выбранному номеру
+                    self.cursor.execute("""
+                        SELECT shelf_id FROM shelf 
+                        WHERE shelf_number = %s AND rackid = (
+                            SELECT rack_id FROM rack 
+                            WHERE rack_number = %s AND roomid = (
+                                SELECT room_id FROM room 
+                                WHERE room_number = %s AND warehouseid = (
+                                    SELECT warehouse_id FROM warehouse 
+                                    WHERE warehouse_number = %s
+                                )
+                            )
+                        )
+                    """, (shelf_number, rack_var.get(), room_var.get(), warehouse_var.get()))
+                    
+                    shelf_data = self.cursor.fetchone()
+                    if not shelf_data:
+                        raise ValueError("Полка не найдена в базе данных")
+                    shelf_id = shelf_data[0]
                     
                     # Получаем тип детали и вес
                     type_detail = type_var.get()
@@ -1611,226 +1892,6 @@ class WarehouseApp:
             except Exception as e:
                 self.conn.rollback()
                 messagebox.showerror("Ошибка", f"Не удалось удалить сотрудника: {str(e)}")
-    
-    # Методы для работы с деталями
-    def add_detail(self):
-        """Добавление новой детали"""
-        if not self.can_edit_details:
-            messagebox.showerror("Ошибка", "У вас нет прав на добавление накладных")
-            return
-        try:
-            add_window = Toplevel(self.root)
-            add_window.title("Добавить деталь")
-            
-            # Получаем список складов, комнат, стеллажей и полок
-            self.cursor.execute("""
-                SELECT 
-                    w.warehouse_id, w.warehouse_number,
-                    r.room_id, r.room_number,
-                    rk.rack_id, rk.rack_number,
-                    s.shelf_id, s.shelf_number
-                FROM warehouse w
-                JOIN room r ON w.warehouse_id = r.warehouseid
-                JOIN rack rk ON r.room_id = rk.roomid
-                JOIN shelf s ON rk.rack_id = s.rackid
-                ORDER BY w.warehouse_number, r.room_number, rk.rack_number, s.shelf_number
-            """)
-            
-            locations = self.cursor.fetchall()
-            location_options = [
-                f"Склад {w_num}, комната {r_num}, стеллаж {rk_num}, полка {s_num}"
-                for w_id, w_num, r_id, r_num, rk_id, rk_num, s_id, s_num in locations
-            ]
-            
-            # Создаем элементы формы
-            Label(add_window, text="Местоположение:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
-            location_var = StringVar()
-            location_combobox = ttk.Combobox(add_window, textvariable=location_var, 
-                                values=location_options, width=50)  
-            location_combobox.grid(row=0, column=1, padx=5, pady=5, sticky=EW)
-            
-            Label(add_window, text="Тип детали:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
-            type_entry = Entry(add_window)
-            type_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
-            
-            Label(add_window, text="Вес (кг):").grid(row=2, column=0, padx=5, pady=5, sticky=W)
-            weight_entry = Entry(add_window)
-            weight_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
-            
-            def save_detail():
-                try:
-                    # Получаем ID полки из выбранного местоположения
-                    selected_index = location_combobox.current()
-                    if selected_index == -1:
-                        raise ValueError("Не выбрано местоположение")
-                    
-                    shelf_id = locations[selected_index][6]
-                    type_detail = type_entry.get()
-                    weight = float(weight_entry.get())
-                    
-                    # Вставляем деталь
-                    self.cursor.execute("""
-                        INSERT INTO details (shelfid, type_detail, weight)
-                        VALUES (%s, %s, %s)
-                    """, (shelf_id, type_detail, weight))
-                    
-                    self.conn.commit()
-                    self.load_details()
-                    add_window.destroy()
-                    messagebox.showinfo("Успех", "Деталь успешно добавлена")
-                except Exception as e:
-                    self.conn.rollback()
-                    messagebox.showerror("Ошибка", f"Не удалось добавить деталь: {str(e)}")
-            
-            Button(add_window, text="Сохранить", command=save_detail).grid(row=3, column=0, columnspan=2, pady=10)
-            
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось открыть форму: {str(e)}")
-    
-    def edit_detail(self):
-        """Редактирование детали"""
-        if not self.can_edit_details:
-            messagebox.showerror("Ошибка", "У вас нет прав на добавление накладных")
-            return
-        selected = self.details_tree.selection()
-        if not selected:
-            messagebox.showwarning("Предупреждение", "Выберите деталь для редактирования")
-            return
-        
-        item = self.details_tree.item(selected[0])
-        detail_id = item['values'][0]
-        
-        try:
-            # Получаем текущие данные о детали
-            self.cursor.execute("""
-                SELECT 
-                    d.detail_id, d.type_detail, d.weight,
-                    s.shelf_id, s.shelf_number,
-                    rk.rack_id, rk.rack_number,
-                    r.room_id, r.room_number,
-                    w.warehouse_id, w.warehouse_number
-                FROM details d
-                JOIN shelf s ON d.shelfid = s.shelf_id
-                JOIN rack rk ON s.rackid = rk.rack_id
-                JOIN room r ON rk.roomid = r.room_id
-                JOIN warehouse w ON r.warehouseid = w.warehouse_id
-                WHERE d.detail_id = %s
-            """, (detail_id,))
-            
-            detail_data = self.cursor.fetchone()
-            
-            if not detail_data:
-                messagebox.showerror("Ошибка", "Деталь не найдена")
-                return
-            
-            edit_window = Toplevel(self.root)
-            edit_window.title("Редактировать деталь")
-            
-            # Получаем список всех возможных местоположений
-            self.cursor.execute("""
-                SELECT 
-                    w.warehouse_id, w.warehouse_number,
-                    r.room_id, r.room_number,
-                    rk.rack_id, rk.rack_number,
-                    s.shelf_id, s.shelf_number
-                FROM warehouse w
-                JOIN room r ON w.warehouse_id = r.warehouseid
-                JOIN rack rk ON r.room_id = rk.roomid
-                JOIN shelf s ON rk.rack_id = s.rackid
-                ORDER BY w.warehouse_number, r.room_number, rk.rack_number, s.shelf_number
-            """)
-            
-            locations = self.cursor.fetchall()
-            location_options = [
-                f"Склад {w_num}, комната {r_num}, стеллаж {rk_num}, полка {s_num}"
-                for w_id, w_num, r_id, r_num, rk_id, rk_num, s_id, s_num in locations
-            ]
-            
-            # Находим текущее местоположение
-            current_location = next(
-                i for i, (w_id, w_num, r_id, r_num, rk_id, rk_num, s_id, s_num) in enumerate(locations)
-                if s_id == detail_data[3]
-            )
-            
-            # Создаем элементы формы с текущими значениями
-            Label(edit_window, text="Местоположение:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
-            location_var = StringVar()
-            location_combobox = ttk.Combobox(edit_window, textvariable=location_var, values=location_options)
-            location_combobox.current(current_location)
-            location_combobox.grid(row=0, column=1, padx=5, pady=5, sticky=EW)
-            
-            Label(edit_window, text="Тип детали:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
-            type_entry = Entry(edit_window)
-            type_entry.insert(0, detail_data[1])
-            type_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
-            
-            Label(edit_window, text="Вес (кг):").grid(row=2, column=0, padx=5, pady=5, sticky=W)
-            weight_entry = Entry(edit_window)
-            weight_entry.insert(0, str(detail_data[2]))
-            weight_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
-            
-            def save_changes():
-                try:
-                    # Получаем ID полки из выбранного местоположения
-                    selected_index = location_combobox.current()
-                    if selected_index == -1:
-                        raise ValueError("Не выбрано местоположение")
-                    
-                    shelf_id = locations[selected_index][6]
-                    type_detail = type_entry.get()
-                    weight = float(weight_entry.get())
-                    
-                    # Обновляем деталь
-                    self.cursor.execute("""
-                        UPDATE details 
-                        SET shelfid = %s, type_detail = %s, weight = %s
-                        WHERE detail_id = %s
-                    """, (shelf_id, type_detail, weight, detail_id))
-                    
-                    self.conn.commit()
-                    self.load_details()
-                    edit_window.destroy()
-                    messagebox.showinfo("Успех", "Деталь успешно обновлена")
-                except Exception as e:
-                    self.conn.rollback()
-                    messagebox.showerror("Ошибка", f"Не удалось обновить деталь: {str(e)}")
-            
-            Button(edit_window, text="Сохранить", command=save_changes).grid(row=3, column=0, columnspan=2, pady=10)
-            
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось открыть форму: {str(e)}")
-    
-    def delete_detail(self):
-        """Удаление детали"""
-        selected = self.details_tree.selection()
-        if not selected:
-            messagebox.showwarning("Предупреждение", "Выберите деталь для удаления")
-            return
-        
-        item = self.details_tree.item(selected[0])
-        detail_id = item['values'][0]
-        detail_type = item['values'][1]
-        
-        if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите удалить деталь '{detail_type}'?"):
-            try:
-                self.cursor.execute("DELETE FROM details WHERE detail_id = %s", (detail_id,))
-                self.conn.commit()
-                self.load_details()
-                messagebox.showinfo("Успех", "Деталь успешно удалена")
-            except Exception as e:
-                self.conn.rollback()
-                messagebox.showerror("Ошибка", f"Не удалось удалить деталь: {str(e)}")
-    
-    def __del__(self):
-        """Закрытие соединения с БД при уничтожении объекта"""
-        if hasattr(self, 'conn'):
-            self.conn.close()
-
-def close_connection(connection):
-    """Функция для закрытия соединения с БД"""
-    if connection:
-        connection.close()
-        print("[INFO] PostgreSQL connection closed.")
 
 def create_connection(login, password):
     try:
@@ -1844,14 +1905,14 @@ def create_connection(login, password):
         return connection
     except Exception as ex:
         print(f"[CONNECTION ERROR] Failed to connect: {ex}")
-        return (None, None)
+        return None
 
 def start_work():
     login, password = entry_name.get(), entry_password.get()
     print(f"[AUTH] Attempting login for user: {login}")
     active_user = create_connection(login, password)
     
-    if active_user is not (None, None):
+    if active_user is not None:
         print("[AUTH] Login successful")
         window.destroy()
         main_win = Tk()
@@ -1861,8 +1922,7 @@ def start_work():
         print("[AUTH] Login failed")
         messagebox.showerror('Ошибка авторизации', 
                            'Произошла ошибка авторизации пользователя! Проверьте логин и пароль.')
-
-# Создание окна авторизации (из вашего кода)
+        
 window = Tk()
 window.geometry('%dx%d+%d+%d' % (500, 400, 
                                 (window.winfo_screenwidth()/2) - (500/2), 
