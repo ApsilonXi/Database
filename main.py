@@ -1,13 +1,9 @@
 import psycopg2
 from tkinter import *
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-
-class WarehouseApp:
-    import psycopg2
-from tkinter import *
-from tkinter import ttk, messagebox
-from datetime import datetime
+import os
+import subprocess
 
 class WarehouseApp:
     def __init__(self, root, login, password, active_user):
@@ -15,6 +11,8 @@ class WarehouseApp:
         self.root.title("Управление складом")
         self.root.geometry("1200x800")
         self.current_user = login
+        self.user_password = password  # Сохраняем пароль пользователя
+        self.initial_state = None
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         
@@ -39,6 +37,9 @@ class WarehouseApp:
             self.cursor = self.conn.cursor()
             self.determine_user_permissions()
             
+            # Сохраняем начальное состояние базы данных
+            self.save_initial_state()
+            
             self.status_bar = Label(root, text=f"Вход выполнен как: {login} | Готово", bd=1, relief=SUNKEN, anchor=W)
             self.status_bar.pack(side=BOTTOM, fill=X)
             
@@ -57,6 +58,9 @@ class WarehouseApp:
                 
             if self.can_access_employees:
                 self.create_employee_tab()
+            
+            # Всегда добавляем вкладку настроек последней
+            self.create_settings_tab()
                 
         except psycopg2.Error as e:
             print(f"[TRANSACTION ERROR] Initialization failed: {e}")
@@ -64,10 +68,637 @@ class WarehouseApp:
             self.root.destroy()
 
     def on_close(self):
+        if hasattr(self, 'initial_transaction'):
+            self.initial_transaction.close()
         if hasattr(self, 'conn') and self.conn:
             self.conn.close()
             print("[INFO] PostgreSQL connection closed.")
         self.root.destroy()
+
+    def create_context_menu(self, event, tree, menu_items):
+        """Создание контекстного меню для Treeview"""
+        # Получаем элемент, по которому кликнули
+        item = tree.identify_row(event.y)
+        if not item:
+            return
+            
+        # Выделяем элемент
+        tree.selection_set(item)
+        
+        # Создаем меню
+        menu = Menu(self.root, tearoff=0)
+        
+        # Добавляем пункты меню
+        for label, command in menu_items:
+            if command:  # Если команда не (None, None)
+                menu.add_command(label=label, command=command)
+            else:
+                menu.add_separator()
+        
+        # Показываем меню в позиции клика
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+    
+    def create_settings_tab(self):
+        """Создает вкладку настроек для пользователя"""
+        tab = Frame(self.notebook)
+        self.notebook.add(tab, text="Настройки")
+        
+        # Основной фрейм для кнопок
+        frame = Frame(tab)
+        frame.pack(pady=20)
+        
+        # Кнопка отката для всех пользователей
+        btn_rollback = Button(frame, text="Откат системы к началу текущей сессии", 
+                            command=self.rollback_to_initial_state)
+        btn_rollback.pack(pady=10, fill=X)
+        
+        # Новая кнопка для отмены последней операции
+        btn_undo = Button(frame, text="Отменить последнюю операцию", 
+                        command=self.undo_last_operation)
+        btn_undo.pack(pady=10, fill=X)
+        
+        # Дополнительные функции для владельца
+        if self.current_user == 'warehouse_owner':
+            btn_backup = Button(frame, text="Резервное копирование", 
+                            command=self.create_backup)
+            btn_backup.pack(pady=10, fill=X)
+            
+            btn_restore = Button(frame, text="Загрузка резервной копии", 
+                            command=self.restore_from_backup)
+            btn_restore.pack(pady=10, fill=X)
+            
+            btn_edit_warehouse = Button(frame, text="Редактирование структуры склада", 
+                                    command=self.edit_warehouse_structure)
+            btn_edit_warehouse.pack(pady=10, fill=X)
+
+    def undo_last_operation(self):
+        """Отменяет последнюю операцию с защитой от повторной отмены"""
+        try:
+            # Получаем последнюю НЕОТМЕНЕННУЮ операцию
+            self.cursor.execute("""
+                SELECT log_id, table_name, action_type, record_id, old_values, new_values
+                FROM log_table
+                WHERE action_type NOT IN ('UNDO', 'ROLLBACK')
+                AND log_id NOT IN (SELECT record_id FROM log_table WHERE action_type = 'UNDO')
+                ORDER BY log_id DESC
+                LIMIT 1
+            """)
+            
+            last_op = self.cursor.fetchone()
+            
+            if not last_op:
+                messagebox.showinfo("Информация", "Нет операций для отмены")
+                return
+                
+            log_id, table, action, record_id, old_values, new_values = last_op
+            
+            # Начинаем транзакцию
+            self.cursor.execute("BEGIN")
+            
+            try:
+                if action == 'INSERT':
+                    # Для INSERT делаем DELETE
+                    pk = self.get_primary_key(table)
+                    self.cursor.execute(f"""
+                        DELETE FROM {table} 
+                        WHERE {pk} = %s
+                        RETURNING *
+                    """, (record_id,))
+                    
+                elif action == 'DELETE' and old_values:
+                    # Для DELETE делаем INSERT с старыми значениями
+                    columns = ', '.join(old_values.keys())
+                    values = ', '.join(['%s'] * len(old_values))
+                    self.cursor.execute(f"""
+                        INSERT INTO {table} ({columns}) 
+                        VALUES ({values})
+                        RETURNING *
+                    """, list(old_values.values()))
+                    
+                elif action == 'UPDATE' and old_values:
+                    # Для UPDATE восстанавливаем старые значения
+                    set_clause = ', '.join([f"{k} = %s" for k in old_values.keys()])
+                    self.cursor.execute(f"""
+                        UPDATE {table} 
+                        SET {set_clause}
+                        WHERE {self.get_primary_key(table)} = %s
+                        RETURNING *
+                    """, list(old_values.values()) + [record_id])
+                
+                # Фиксируем отмену в логах
+                # Преобразуем словари в JSON перед сохранением
+                import json
+                old_values_json = json.dumps(new_values) if new_values else None
+                new_values_json = json.dumps(old_values) if old_values else None
+                
+                self.cursor.execute("""
+                    INSERT INTO log_table 
+                    (table_name, action_type, record_id, old_values, new_values)
+                    VALUES (%s, 'UNDO', %s, %s, %s)
+                """, (table, log_id, old_values_json, new_values_json))
+                
+                self.conn.commit()
+                
+                # Обновляем данные в интерфейсе
+                self.refresh_affected_tab(table)
+                
+                messagebox.showinfo("Успех", "Последняя операция успешно отменена")
+                
+            except Exception as e:
+                self.conn.rollback()
+                messagebox.showerror("Ошибка", f"Не удалось отменить операцию: {str(e)}")
+                
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка при отмене операции: {str(e)}")
+
+    def refresh_affected_tab(self, table_name):
+        """Обновляет вкладку, соответствующую измененной таблице"""
+        if table_name in ['invoice', 'invoice_detail', 'invoice_employee'] and hasattr(self, 'invoice_tree'):
+            self.load_invoices()
+        elif table_name == 'details' and hasattr(self, 'warehouse_tree'):
+            self.load_warehouse()
+        elif table_name == 'counteragent' and hasattr(self, 'counteragent_tree'):
+            self.load_counteragents()
+        elif table_name == 'employee' and hasattr(self, 'employee_tree'):
+            self.load_employees()
+        else:
+            # Если не знаем к какой вкладке относится таблица, обновляем все
+            self.refresh_all_tabs()
+
+    def refresh_all_tabs(self):
+        """Обновляет все вкладки приложения"""
+        if hasattr(self, 'invoice_tree'):
+            self.load_invoices()
+        if hasattr(self, 'warehouse_tree'):
+            self.load_warehouse()
+        if hasattr(self, 'counteragent_tree'):
+            self.load_counteragents()
+        if hasattr(self, 'employee_tree'):
+            self.load_employees()
+
+    def save_initial_state(self):
+        """Сохраняет информацию о начальной точке отката"""
+        try:
+            self.cursor.execute("SELECT current_timestamp")
+            self.initial_state_time = self.cursor.fetchone()[0]
+            print(f"[INFO] Saved initial state time: {self.initial_state_time}")
+        except Exception as e:
+            print(f"[ERROR] Failed to save initial state: {e}")
+            self.initial_state_time = None
+
+    def rollback_to_initial_state(self):
+        """Откатывает изменения с использованием таблицы логов с защитой от повторного отката"""
+        if not self.initial_state_time:
+            messagebox.showwarning("Предупреждение", "Не удалось определить начальное состояние сессии")
+            return
+            
+        if messagebox.askyesno("Подтверждение", 
+                            "Вы уверены, что хотите откатить все изменения текущей сессии?"):
+            try:
+                # Получаем список изменений из логов
+                self.cursor.execute("""
+                    SELECT table_name, action_type, record_id, old_values
+                    FROM log_table
+                    WHERE action_time >= %s
+                    AND log_id > COALESCE((SELECT MAX(log_id) FROM log_table WHERE action_type = 'ROLLBACK'), 0)
+                    ORDER BY log_id DESC
+                """, (self.initial_state_time,))
+                
+                changes = self.cursor.fetchall()
+                
+                if not changes:
+                    messagebox.showinfo("Информация", "Нет изменений для отката")
+                    return
+                
+                # Начинаем транзакцию
+                self.cursor.execute("BEGIN")
+                
+                # Обрабатываем изменения в обратном порядке
+                for table, action, record_id, old_values in reversed(changes):
+                    try:
+                        if action == 'INSERT':
+                            # Проверяем, существует ли запись перед удалением
+                            self.cursor.execute(f"""
+                                SELECT 1 FROM {table} 
+                                WHERE {self.get_primary_key(table)} = %s
+                            """, (record_id,))
+                            if self.cursor.fetchone():
+                                self.cursor.execute(f"""
+                                    DELETE FROM {table} 
+                                    WHERE {self.get_primary_key(table)} = %s
+                                """, (record_id,))
+                                
+                        elif action == 'DELETE' and old_values:
+                            # Проверяем, не существует ли запись перед вставкой
+                            self.cursor.execute(f"""
+                                SELECT 1 FROM {table} 
+                                WHERE {self.get_primary_key(table)} = %s
+                            """, (record_id,))
+                            if not self.cursor.fetchone():
+                                columns = ', '.join(old_values.keys())
+                                values = ', '.join(['%s'] * len(old_values))
+                                self.cursor.execute(f"""
+                                    INSERT INTO {table} ({columns}) 
+                                    VALUES ({values})
+                                """, list(old_values.values()))
+                                
+                        elif action == 'UPDATE' and old_values:
+                            # Всегда пытаемся выполнить UPDATE
+                            set_clause = ', '.join([f"{k} = %s" for k in old_values.keys()])
+                            self.cursor.execute(f"""
+                                UPDATE {table} 
+                                SET {set_clause}
+                                WHERE {self.get_primary_key(table)} = %s
+                            """, list(old_values.values()) + [record_id])
+                            
+                    except psycopg2.Error as e:
+                        print(f"[WARNING] Failed to revert {action} on {table}.{record_id}: {e}")
+                        # Продолжаем выполнение несмотря на ошибку
+                        self.conn.rollback()
+                        self.cursor.execute("SAVEPOINT rollback_continue")
+                        continue
+                
+                # Помечаем откат в логах
+                self.cursor.execute("""
+                    INSERT INTO log_table (table_name, action_type, record_id)
+                    VALUES ('SYSTEM', 'ROLLBACK', %s)
+                """, (len(changes),))
+                
+                self.conn.commit()
+                
+                # Обновляем данные во всех вкладках
+                self.refresh_all_tabs()
+                
+                messagebox.showinfo("Успех", "Система успешно откачена к началу сессии")
+                
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось выполнить откат: {str(e)}")
+                self.conn.rollback()
+
+    def refresh_all_tabs(self):
+        """Обновляет все вкладки приложения"""
+        if hasattr(self, 'invoice_tree'):
+            self.load_invoices()
+        if hasattr(self, 'warehouse_tree'):
+            self.load_warehouse()
+        if hasattr(self, 'counteragent_tree'):
+            self.load_counteragents()
+        if hasattr(self, 'employee_tree'):
+            self.load_employees()
+
+    def get_primary_key(self, table_name):
+        """Возвращает имя первичного ключа для таблицы с обработкой исключений"""
+        try:
+            self.cursor.execute("""
+                SELECT a.attname
+                FROM pg_index i
+                JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                WHERE i.indrelid = %s::regclass AND i.indisprimary
+            """, (table_name,))
+            result = self.cursor.fetchone()
+            return result[0] if result else 'id'
+        except:
+            return 'id'
+
+    def create_backup(self):
+        """Создает резервную копию базы данных"""
+        try:
+            # Запрашиваем место сохранения
+            backup_file = filedialog.asksaveasfilename(
+                defaultextension=".backup",
+                filetypes=[("Backup files", "*.backup"), ("All files", "*.*")],
+                title="Сохранить резервную копию как"
+            )
+            
+            if not backup_file:
+                return
+                
+            # Выполняем pg_dump через subprocess
+            command = [
+                'pg_dump',
+                '-h', '127.0.0.1',
+                '-U', 'warehouse_owner',
+                '-d', 'Warehouse_DB',
+                '-F', 'c',  # custom format
+                '-f', backup_file
+            ]
+            
+            # Запускаем процесс (может запросить пароль)
+            process = subprocess.Popen(command, 
+                                     stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE)
+            
+            # Если нужно ввести пароль (зависит от настройки pg_hba.conf)
+            process.communicate(input=b'password\n')  # Замените на реальный пароль
+            
+            if process.returncode == 0:
+                messagebox.showinfo("Успех", f"Резервная копия успешно создана: {backup_file}")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось создать резервную копию")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка при создании резервной копии: {str(e)}")
+
+    def restore_from_backup(self):
+        """Восстанавливает базу данных из резервной копии"""
+        try:
+            # Запрашиваем файл резервной копии
+            backup_file = filedialog.askopenfilename(
+                filetypes=[("Backup files", "*.backup"), ("All files", "*.*")],
+                title="Выберите файл резервной копии"
+            )
+            
+            if not backup_file:
+                return
+                
+            if not messagebox.askyesno("Подтверждение", 
+                                      "Вы уверены, что хотите восстановить базу данных из резервной копии? Все текущие данные будут потеряны!"):
+                return
+                
+            # Закрываем текущее соединение
+            self.conn.close()
+            
+            # Выполняем pg_restore через subprocess
+            command = [
+                'pg_restore',
+                '-h', '127.0.0.1',
+                '-U', 'warehouse_owner',
+                '-d', 'Warehouse_DB',
+                '-c',  # Очистить базу перед восстановлением
+                backup_file
+            ]
+            
+            # Запускаем процесс (может запросить пароль)
+            process = subprocess.Popen(command, 
+                                     stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE)
+            
+            # Если нужно ввести пароль (зависит от настройки pg_hba.conf)
+            process.communicate(input=b'password\n')  # Замените на реальный пароль
+            
+            if process.returncode == 0:
+                messagebox.showinfo("Успех", "База данных успешно восстановлена из резервной копии")
+                
+                # Перезапускаем приложение
+                self.root.destroy()
+                main_win = Tk()
+                app = WarehouseApp(main_win, self.current_user, 'password', None)  # Замените 'password' на реальный пароль
+                main_win.mainloop()
+            else:
+                messagebox.showerror("Ошибка", "Не удалось восстановить базу данных")
+                # Пытаемся восстановить соединение
+                self.conn = psycopg2.connect(
+                    host="127.0.0.1",
+                    user=self.current_user,
+                    password='password',  # Замените на реальный пароль
+                    database="Warehouse_DB"
+                )
+                self.cursor = self.conn.cursor()
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка при восстановлении из резервной копии: {str(e)}")
+            # Пытаемся восстановить соединение
+            try:
+                self.conn = psycopg2.connect(
+                    host="127.0.0.1",
+                    user=self.current_user,
+                    password='password',  # Замените на реальный пароль
+                    database="Warehouse_DB"
+                )
+                self.cursor = self.conn.cursor()
+            except:
+                self.root.destroy()
+
+    def edit_warehouse_structure(self):
+        """Редактирование структуры склада (склады, комнаты, стеллажи, полки)"""
+        edit_window = Toplevel(self.root)
+        edit_window.title("Редактирование структуры склада")
+        edit_window.geometry("600x400")
+        
+        notebook = ttk.Notebook(edit_window)
+        notebook.pack(fill=BOTH, expand=True)
+        
+        # Вкладка для складов
+        warehouse_tab = Frame(notebook)
+        notebook.add(warehouse_tab, text="Склады")
+        self.create_structure_tab(warehouse_tab, "warehouse", ["warehouse_number"])
+        
+        # Вкладка для комнат
+        room_tab = Frame(notebook)
+        notebook.add(room_tab, text="Комнаты")
+        self.create_structure_tab(room_tab, "room", ["warehouseid", "room_number"])
+        
+        # Вкладка для стеллажей
+        rack_tab = Frame(notebook)
+        notebook.add(rack_tab, text="Стеллажи")
+        self.create_structure_tab(rack_tab, "rack", ["roomid", "rack_number"])
+        
+        # Вкладка для полок
+        shelf_tab = Frame(notebook)
+        notebook.add(shelf_tab, text="Полки")
+        self.create_structure_tab(shelf_tab, "shelf", ["rackid", "shelf_number"])
+
+    def create_structure_tab(self, parent, table_name, columns):
+        """Создает вкладку для редактирования структуры склада"""
+        # Treeview для отображения данных
+        tree = ttk.Treeview(parent, columns=("id", *columns), show="headings")
+        tree.heading("id", text="ID")
+        
+        # Настраиваем заголовки и колонки
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=100)
+        
+        tree.column("id", width=50)
+        
+        # Scrollbar
+        scroll = ttk.Scrollbar(parent, command=tree.yview)
+        scroll.pack(side=RIGHT, fill=Y)
+        tree.configure(yscrollcommand=scroll.set)
+        
+        tree.pack(fill=BOTH, expand=True)
+        
+        # Загрузка данных
+        def load_data():
+            tree.delete(*tree.get_children())
+            self.cursor.execute(f"SELECT * FROM {table_name} ORDER BY 1")
+            for row in self.cursor.fetchall():
+                tree.insert("", END, values=row)
+        
+        load_data()
+        
+        # Кнопки управления
+        btn_frame = Frame(parent)
+        btn_frame.pack(fill=X, pady=5)
+        
+        btn_add = Button(btn_frame, text="Добавить", command=lambda: self.add_structure_item(table_name, columns, load_data))
+        btn_add.pack(side=LEFT, padx=5)
+        
+        btn_edit = Button(btn_frame, text="Изменить", command=lambda: self.edit_structure_item(tree, table_name, columns, load_data))
+        btn_edit.pack(side=LEFT, padx=5)
+        
+        btn_delete = Button(btn_frame, text="Удалить", command=lambda: self.delete_structure_item(tree, table_name, load_data))
+        btn_delete.pack(side=LEFT, padx=5)
+        
+        btn_refresh = Button(btn_frame, text="Обновить", command=load_data)
+        btn_refresh.pack(side=LEFT, padx=5)
+
+    def add_structure_item(self, table_name, columns, callback):
+        """Добавляет новый элемент структуры склада"""
+        add_window = Toplevel(self.root)
+        add_window.title(f"Добавить в {table_name}")
+        
+        entries = []
+        labels = []
+        
+        for i, col in enumerate(columns):
+            labels.append(Label(add_window, text=col))
+            labels[-1].grid(row=i, column=0, padx=5, pady=5, sticky=W)
+            
+            if col.endswith("id"):  # Это внешний ключ - делаем выпадающий список
+                ref_table = col.replace("id", "")
+                self.cursor.execute(f"SELECT {ref_table}_id, {ref_table}_number FROM {ref_table}")
+                options = [f"{id}: {num}" for id, num in self.cursor.fetchall()]
+                
+                var = StringVar()
+                combo = ttk.Combobox(add_window, textvariable=var, values=options)
+                combo.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
+                entries.append((var, True))  # True означает, что это combobox
+            else:
+                entry = Entry(add_window)
+                entry.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
+                entries.append((entry, False))
+        
+        def save_item():
+            try:
+                values = []
+                for entry, is_combo in entries:
+                    if is_combo:
+                        # Для combobox получаем ID из значения "id: number"
+                        val = entry.get().split(":")[0].strip()
+                        values.append(val)
+                    else:
+                        values.append(entry.get())
+                
+                columns_str = ", ".join(columns)
+                placeholders = ", ".join(["%s"] * len(columns))
+                
+                self.cursor.execute(
+                    f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})",
+                    values
+                )
+                
+                self.conn.commit()
+                add_window.destroy()
+                callback()
+                messagebox.showinfo("Успех", "Запись успешно добавлена")
+            except Exception as e:
+                self.conn.rollback()
+                messagebox.showerror("Ошибка", f"Не удалось добавить запись: {str(e)}")
+        
+        Button(add_window, text="Сохранить", command=save_item).grid(
+            row=len(columns), column=0, columnspan=2, pady=10)
+
+    def edit_structure_item(self, tree, table_name, columns, callback):
+        """Редактирует элемент структуры склада"""
+        selected = tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите запись для редактирования")
+            return
+        
+        item = tree.item(selected[0])
+        item_id = item['values'][0]
+        
+        edit_window = Toplevel(self.root)
+        edit_window.title(f"Изменить запись в {table_name}")
+        
+        entries = []
+        labels = []
+        
+        # Получаем текущие данные
+        self.cursor.execute(f"SELECT * FROM {table_name} WHERE {table_name}_id = %s", (item_id,))
+        current_data = self.cursor.fetchone()
+        
+        for i, (col, val) in enumerate(zip(columns, current_data[1:])):  # Пропускаем ID
+            labels.append(Label(edit_window, text=col))
+            labels[-1].grid(row=i, column=0, padx=5, pady=5, sticky=W)
+            
+            if col.endswith("id"):  # Это внешний ключ - делаем выпадающий список
+                ref_table = col.replace("id", "")
+                self.cursor.execute(f"SELECT {ref_table}_id, {ref_table}_number FROM {ref_table}")
+                options = [f"{id}: {num}" for id, num in self.cursor.fetchall()]
+                
+                # Находим текущее значение
+                current_option = None
+                for opt in options:
+                    if opt.startswith(str(val) + ":"):
+                        current_option = opt
+                        break
+                
+                var = StringVar(value=current_option)
+                combo = ttk.Combobox(edit_window, textvariable=var, values=options)
+                combo.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
+                entries.append((var, True))  # True означает, что это combobox
+            else:
+                entry = Entry(edit_window)
+                entry.insert(0, str(val))
+                entry.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
+                entries.append((entry, False))
+        
+        def save_changes():
+            try:
+                values = []
+                for entry, is_combo in entries:
+                    if is_combo:
+                        # Для combobox получаем ID из значения "id: number"
+                        val = entry.get().split(":")[0].strip()
+                        values.append(val)
+                    else:
+                        values.append(entry.get())
+                
+                # Добавляем ID в конец для WHERE
+                values.append(item_id)
+                
+                set_clause = ", ".join([f"{col} = %s" for col in columns])
+                
+                self.cursor.execute(
+                    f"UPDATE {table_name} SET {set_clause} WHERE {table_name}_id = %s",
+                    values
+                )
+                
+                self.conn.commit()
+                edit_window.destroy()
+                callback()
+                messagebox.showinfo("Успех", "Запись успешно обновлена")
+            except Exception as e:
+                self.conn.rollback()
+                messagebox.showerror("Ошибка", f"Не удалось обновить запись: {str(e)}")
+        
+        Button(edit_window, text="Сохранить", command=save_changes).grid(
+            row=len(columns), column=0, columnspan=2, pady=10)
+
+    def delete_structure_item(self, tree, table_name, callback):
+        """Удаляет элемент структуры склада"""
+        selected = tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите запись для удаления")
+            return
+        
+        item = tree.item(selected[0])
+        item_id = item['values'][0]
+        
+        if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите удалить запись с ID {item_id}?"):
+            try:
+                self.cursor.execute(f"DELETE FROM {table_name} WHERE {table_name}_id = %s", (item_id,))
+                self.conn.commit()
+                callback()
+                messagebox.showinfo("Успех", "Запись успешно удалена")
+            except Exception as e:
+                self.conn.rollback()
+                messagebox.showerror("Ошибка", f"Не удалось удалить запись: {str(e)}")
 
     def determine_user_permissions(self):
         self.can_access_invoices = False
@@ -75,11 +706,13 @@ class WarehouseApp:
         self.can_access_counteragents = False
         self.can_access_employees = False
         self.can_access_details = False
+        
         self.can_edit_invoices = False
         self.can_edit_warehouse = False
         self.can_edit_counteragents = False
         self.can_edit_employees = False
         self.can_edit_details = False
+        self.can_update_invoice_status = False  
         
         try:
             self.cursor.execute("""
@@ -118,7 +751,7 @@ class WarehouseApp:
             
             if self.current_user == 'clerk':
                 self.can_edit_invoices = False
-                self.can_update_invoice_status = True
+                self.can_update_invoice_status = True  
             
         except psycopg2.Error as e:
             print(f"[PERMISSION ERROR] Failed to check permissions: {e}")
@@ -127,31 +760,7 @@ class WarehouseApp:
             print(f"[VIEW ERROR] Failed to access view: {e}")
             messagebox.showerror("Ошибка", "Не удалось получить доступ к данным. Проверьте права доступа.")
 
-    def create_context_menu(self, event, tree, menu_items):
-        """Создание контекстного меню для Treeview"""
-        # Получаем элемент, по которому кликнули
-        item = tree.identify_row(event.y)
-        if not item:
-            return
-            
-        # Выделяем элемент
-        tree.selection_set(item)
-        
-        # Создаем меню
-        menu = Menu(self.root, tearoff=0)
-        
-        # Добавляем пункты меню
-        for label, command in menu_items:
-            if command:  # Если команда не (None, None)
-                menu.add_command(label=label, command=command)
-            else:
-                menu.add_separator()
-        
-        # Показываем меню в позиции клика
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+    
 
     def create_invoice_tab(self):
         """Создание вкладки для работы с накладными с учетом прав доступа"""
@@ -339,7 +948,12 @@ class WarehouseApp:
                 (None, None)  # разделитель
             ])
         
-        menu_items.append(("Обновить список", self.load_counteragents))
+        # Добавляем пункт поиска для всех пользователей
+        menu_items.extend([
+            ("Найти контрагента", self.search_counteragent),  # Используем существующий метод
+            (None, None),  # разделитель
+            ("Обновить список", self.load_counteragents)
+        ])
         
         self.counteragent_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.counteragent_tree, menu_items))
         self.counteragent_tree.bind("<Delete>", lambda e: self.delete_counteragent())
@@ -383,11 +997,16 @@ class WarehouseApp:
                 (None, None)  # разделитель
             ])
         
-        menu_items.append(("Обновить список", self.load_employees))
+        # Добавляем пункт поиска для всех пользователей
+        menu_items.extend([
+            ("Найти сотрудника", self.search_employee),
+            (None, None),  # разделитель
+            ("Обновить список", self.load_employees)
+        ])
         
         self.employee_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.employee_tree, menu_items))
         self.employee_tree.bind("<Delete>", lambda e: self.delete_employee())
-        
+    
         # Загрузка данных
         self.load_employees()
     
@@ -636,32 +1255,36 @@ class WarehouseApp:
         if not self.can_edit_invoices:
             messagebox.showerror("Ошибка", "У вас нет прав на добавление накладных")
             return
+        
         try:
             add_window = Toplevel(self.root)
             add_window.title("Добавить накладную")
             
-            # Получаем список контрагентов
-            self.cursor.execute("SELECT counteragent_id, counteragent_name FROM counteragent")
-            counteragents = self.cursor.fetchall()
-            counteragent_names = [f"{id}: {name}" for id, name in counteragents]
+            # Получаем список контрагентов (если есть доступ)
+            if self.can_access_counteragents:
+                self.cursor.execute("SELECT counteragent_id, counteragent_name FROM counteragent")
+                counteragents = self.cursor.fetchall()
+                counteragent_names = [name for id, name in counteragents]
+                counteragent_ids = {name: id for id, name in counteragents}
+            else:
+                counteragents = []
+                counteragent_names = []
+                counteragent_ids = {}
+                messagebox.showwarning("Предупреждение", "Нет доступа к списку контрагентов")
             
-            # Получаем список деталей
+            # Получаем список ответственных ИЗ ПРЕДСТАВЛЕНИЯ (без доступа к таблице employee)
             self.cursor.execute("""
-                                SELECT detail_id, 
-                                    CONCAT(type_detail, ' (Склад: ', warehouse_number, 
-                                            ', Комната: ', room_number, 
-                                            ', Стеллаж: ', rack_number, 
-                                            ', Полка: ', shelf_number, ')') AS detail_info
-                                FROM warehouse_details_view
-                                ORDER BY type_detail
-                            """)
-            details = self.cursor.fetchall()
-            detail_names = [f"{id}: {name}" for id, name in details]
-            
-            # Получаем список сотрудников
-            self.cursor.execute("SELECT employee_id, last_name, first_name, patronymic FROM employee")
+                SELECT DISTINCT 
+                    responsible_id,
+                    responsible_last_name || ' ' || 
+                    responsible_first_name || ' ' || 
+                    COALESCE(responsible_patronymic, '') as responsible_name
+                FROM invoice_details_view
+                ORDER BY responsible_name
+            """)
             employees = self.cursor.fetchall()
-            employee_names = [f"{id}: {last_name} {first_name} {patronymic}" for id, last_name, first_name, patronymic in employees]
+            employee_names = [name for id, name in employees]
+            employee_ids = {name: id for id, name in employees}
             
             # Создаем элементы формы
             Label(add_window, text="Контрагент:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
@@ -669,9 +1292,11 @@ class WarehouseApp:
             counteragent_combobox = ttk.Combobox(add_window, textvariable=counteragent_var, values=counteragent_names)
             counteragent_combobox.grid(row=0, column=1, padx=5, pady=5, sticky=EW)
             
-            Label(add_window, text="Дата и время:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+            Label(add_window, text="Дата и время (ГГГГ-ММ-ДД ЧЧ:ММ):").grid(row=1, column=0, padx=5, pady=5, sticky=W)
             date_entry = Entry(add_window)
-            date_entry.insert(0, datetime.now().strftime("%Y-%m-%d %H:%M"))
+            # Устанавливаем текущую дату и время по умолчанию
+            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M")
+            date_entry.insert(0, current_datetime)
             date_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
             
             Label(add_window, text="Тип накладной:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
@@ -686,10 +1311,11 @@ class WarehouseApp:
             status_combobox.current(0)
             status_combobox.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
             
+            # Изменено: поле ввода вместо выпадающего списка
             Label(add_window, text="Деталь:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
             detail_var = StringVar()
-            detail_combobox = ttk.Combobox(add_window, textvariable=detail_var, values=detail_names)
-            detail_combobox.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
+            detail_entry = Entry(add_window, textvariable=detail_var)
+            detail_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
             
             Label(add_window, text="Количество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
             quantity_entry = Entry(add_window)
@@ -702,24 +1328,60 @@ class WarehouseApp:
             
             def save_invoice():
                 try:
-                    # Получаем ID из выбранных значений
-                    counteragent_id = int(counteragent_var.get().split(":")[0])
-                    detail_id = int(detail_var.get().split(":")[0])
-                    employee_id = int(employee_var.get().split(":")[0])
+                    # Проверяем дату
+                    input_datetime_str = date_entry.get()
+                    try:
+                        input_datetime = datetime.strptime(input_datetime_str, "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        raise ValueError("Некорректный формат даты. Используйте ГГГГ-ММ-ДД ЧЧ:ММ")
+                    
+                    current_datetime = datetime.now()
+                    if input_datetime > current_datetime:
+                        raise ValueError("Дата накладной не может быть в будущем. Укажите текущую или прошедшую дату.")
+                    
+                    # Получаем ID из выбранных значений через словари
+                    counteragent_id = counteragent_ids.get(counteragent_var.get())
+                    employee_id = employee_ids.get(employee_var.get())
+                    
+                    if None in (counteragent_id, employee_id):
+                        raise ValueError("Не все обязательные поля заполнены")
+                    
+                    # Проверяем существование детали
+                    detail_name = detail_var.get().strip()
+                    if not detail_name:
+                        raise ValueError("Название детали не может быть пустым")
+                    
+                    # Проверяем, есть ли такая деталь на складе
+                    self.cursor.execute("""
+                        SELECT detail_id FROM details 
+                        WHERE type_detail = %s
+                        LIMIT 1
+                    """, (detail_name,))
+                    
+                    detail_data = self.cursor.fetchone()
+                    if not detail_data:
+                        raise ValueError(f"Деталь '{detail_name}' не найдена на складе")
+                    
+                    detail_id = detail_data[0]
                     
                     # Преобразуем тип и статус
                     type_invoice = type_var.get() == "Выгрузка"
                     status = status_var.get() == "Завершено"
                     
                     # Получаем количество
-                    quantity = int(quantity_entry.get())
+                    try:
+                        quantity = int(quantity_entry.get())
+                        if quantity <= 0:
+                            raise ValueError("Количество должно быть положительным числом")
+                    except ValueError:
+                        raise ValueError("Количество должно быть целым числом")
                     
                     # Вставляем накладную
                     self.cursor.execute("""
                         INSERT INTO invoice (counteragentid, date_time, type_invoice, status)
                         VALUES (%s, %s, %s, %s)
                         RETURNING invoice_id
-                    """, (counteragent_id, date_entry.get(), type_invoice, status))
+                    """, (counteragent_id, input_datetime_str, type_invoice, status))
                     
                     invoice_id = self.cursor.fetchone()[0]
                     
@@ -739,6 +1401,8 @@ class WarehouseApp:
                     self.load_invoices()
                     add_window.destroy()
                     messagebox.showinfo("Успех", "Накладная успешно добавлена")
+                except ValueError as ve:
+                    messagebox.showerror("Ошибка", f"Неверные данные: {str(ve)}")
                 except Exception as e:
                     self.conn.rollback()
                     messagebox.showerror("Ошибка", f"Не удалось добавить накладную: {str(e)}")
@@ -747,12 +1411,13 @@ class WarehouseApp:
             
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось открыть форму: {str(e)}")
-    
+
     def edit_invoice(self):
         """Редактирование накладной с проверкой прав"""
         if not self.can_edit_invoices:
             messagebox.showerror("Ошибка", "У вас нет прав на редактирование накладных")
             return
+        
         selected = self.invoice_tree.selection()
         if not selected:
             messagebox.showwarning("Предупреждение", "Выберите накладную для редактирования")
@@ -765,18 +1430,18 @@ class WarehouseApp:
             # Получаем данные о накладной
             self.cursor.execute("""
                 SELECT 
-                    inv.invoice_id, 
-                    inv.counteragentid,
-                    inv.date_time, 
-                    inv.type_invoice,
-                    inv.status,
-                    invd.detailid,
-                    invd.quantity,
-                    inv_emp.responsible
-                FROM invoice inv
-                JOIN invoice_detail invd ON inv.invoice_id = invd.invoiceid
-                JOIN invoice_employee inv_emp ON inv.invoice_id = inv_emp.invoiceid
-                WHERE inv.invoice_id = %s
+                    invoice_id,
+                    counteragent_name,
+                    date_time,
+                    type_invoice_text,
+                    status_text,
+                    type_detail,
+                    quantity,
+                    responsible_last_name || ' ' || 
+                    responsible_first_name || ' ' || 
+                    COALESCE(responsible_patronymic, '') as responsible
+                FROM invoice_details_view
+                WHERE invoice_id = %s
             """, (invoice_id,))
             
             invoice_data = self.cursor.fetchone()
@@ -794,20 +1459,17 @@ class WarehouseApp:
             counteragent_names = [f"{id}: {name}" for id, name in counteragents]
             
             self.cursor.execute("""
-                                SELECT detail_id, 
-                                    CONCAT(type_detail, ' (Склад: ', warehouse_number, 
-                                            ', Комната: ', room_number, 
-                                            ', Стеллаж: ', rack_number, 
-                                            ', Полка: ', shelf_number, ')') AS detail_info
-                                FROM warehouse_details_view
-                                ORDER BY type_detail
-                            """)
-            details = self.cursor.fetchall()
-            detail_names = [f"{id}: {name}" for id, name in details]
-            
-            self.cursor.execute("SELECT employee_id, last_name, first_name, patronymic FROM employee")
+                SELECT DISTINCT 
+                    responsible_id,
+                    responsible_last_name || ' ' || 
+                    responsible_first_name || ' ' || 
+                    COALESCE(responsible_patronymic, '') as responsible_name
+                FROM invoice_details_view
+                ORDER BY responsible_name
+            """)
             employees = self.cursor.fetchall()
-            employee_names = [f"{id}: {last_name} {first_name} {patronymic}" for id, last_name, first_name, patronymic in employees]
+            employee_names = [name for id, name in employees]
+            employee_ids = {name: id for id, name in employees}
             
             # Создаем элементы формы с текущими значениями
             Label(edit_window, text="Контрагент:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
@@ -817,7 +1479,7 @@ class WarehouseApp:
             
             # Устанавливаем текущее значение контрагента
             for id, name in counteragents:
-                if id == invoice_data[1]:
+                if name == invoice_data[1]:  # invoice_data[1] — это counteragent_name
                     counteragent_var.set(f"{id}: {name}")
                     break
             
@@ -829,29 +1491,24 @@ class WarehouseApp:
             Label(edit_window, text="Тип накладной:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
             type_var = StringVar()
             type_combobox = ttk.Combobox(edit_window, textvariable=type_var, values=["Отгрузка", "Выгрузка"])
-            type_combobox.current(1 if invoice_data[3] else 0)
+            type_combobox.current(1 if invoice_data[3] == "Выгрузка" else 0)
             type_combobox.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
             
             Label(edit_window, text="Статус:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
             status_var = StringVar()
             status_combobox = ttk.Combobox(edit_window, textvariable=status_var, values=["В процессе", "Завершено"])
-            status_combobox.current(1 if invoice_data[4] else 0)
+            status_combobox.current(1 if invoice_data[4] == "Завершено" else 0)
             status_combobox.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
             
-            Label(edit_window, text="Деталь:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
-            detail_var = StringVar()
-            detail_combobox = ttk.Combobox(edit_window, textvariable=detail_var, values=detail_names)
-            detail_combobox.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
-            
-            # Устанавливаем текущее значение детали
-            for id, name in details:
-                if id == invoice_data[5]:
-                    detail_var.set(f"{id}: {name}")
-                    break
+            # Заменяем Combobox на Entry для типа детали
+            Label(edit_window, text="Тип детали:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
+            detail_var = StringVar(value=invoice_data[5])  # invoice_data[5] — это type_detail
+            detail_entry = Entry(edit_window, textvariable=detail_var)
+            detail_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
             
             Label(edit_window, text="Количество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
             quantity_entry = Entry(edit_window)
-            quantity_entry.insert(0, str(invoice_data[6]))
+            quantity_entry.insert(0, str(invoice_data[6]))  # invoice_data[6] — это quantity
             quantity_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
             
             Label(edit_window, text="Ответственный:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
@@ -860,24 +1517,45 @@ class WarehouseApp:
             employee_combobox.grid(row=6, column=1, padx=5, pady=5, sticky=EW)
             
             # Устанавливаем текущее значение сотрудника
-            for id, last_name, first_name, patronymic in employees:
-                if id == invoice_data[7]:
-                    employee_var.set(f"{id}: {last_name} {first_name} {patronymic}")
+            for id, name in employees:
+                if name == invoice_data[7]:  # invoice_data[7] — это ответственный
+                    employee_var.set(name)
                     break
             
             def save_changes():
                 try:
+                    # Проверяем, что тип детали существует в БД
+                    detail_name = detail_var.get().strip()
+                    if not detail_name:
+                        raise ValueError("Тип детали не может быть пустым")
+                    
+                    self.cursor.execute("""
+                        SELECT detail_id FROM details 
+                        WHERE type_detail = %s
+                        LIMIT 1
+                    """, (detail_name,))
+                    
+                    detail_data = self.cursor.fetchone()
+                    if not detail_data:
+                        raise ValueError(f"Деталь '{detail_name}' не найдена на складе")
+                    
+                    detail_id = detail_data[0]
+                    
+                    # Проверяем количество (должно быть > 0)
+                    try:
+                        quantity = int(quantity_entry.get())
+                        if quantity <= 0:
+                            raise ValueError("Количество должно быть положительным числом!")
+                    except ValueError:
+                        raise ValueError("Количество должно быть целым числом!")
+                    
                     # Получаем ID из выбранных значений
                     counteragent_id = int(counteragent_var.get().split(":")[0])
-                    detail_id = int(detail_var.get().split(":")[0])
-                    employee_id = int(employee_var.get().split(":")[0])
+                    employee_id = employee_ids.get(employee_var.get())
                     
                     # Преобразуем тип и статус
                     type_invoice = type_var.get() == "Выгрузка"
                     status = status_var.get() == "Завершено"
-                    
-                    # Получаем количество
-                    quantity = int(quantity_entry.get())
                     
                     # Обновляем накладную
                     self.cursor.execute("""
@@ -904,6 +1582,8 @@ class WarehouseApp:
                     self.load_invoices()
                     edit_window.destroy()
                     messagebox.showinfo("Успех", "Накладная успешно обновлена")
+                except ValueError as ve:
+                    messagebox.showerror("Ошибка", f"Неверные данные: {str(ve)}")
                 except Exception as e:
                     self.conn.rollback()
                     messagebox.showerror("Ошибка", f"Не удалось обновить накладную: {str(e)}")
@@ -914,7 +1594,7 @@ class WarehouseApp:
             messagebox.showerror("Ошибка", f"Не удалось открыть форму: {str(e)}")
     
     def delete_invoice(self):
-        """Удаление накладной"""
+        """Удаление накладной с предварительным удалением связанных записей"""
         selected = self.invoice_tree.selection()
         if not selected:
             messagebox.showwarning("Предупреждение", "Выберите накладную для удаления")
@@ -925,7 +1605,15 @@ class WarehouseApp:
         
         if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите удалить накладную №{invoice_id}?"):
             try:
+                # 1. Удаляем записи из invoice_detail (связанные детали)
+                self.cursor.execute("DELETE FROM invoice_detail WHERE invoiceid = %s", (invoice_id,))
+                
+                # 2. Удаляем записи из invoice_employee (связанных сотрудников)
+                self.cursor.execute("DELETE FROM invoice_employee WHERE invoiceid = %s", (invoice_id,))
+                
+                # 3. Теперь удаляем саму накладную
                 self.cursor.execute("DELETE FROM invoice WHERE invoice_id = %s", (invoice_id,))
+                
                 self.conn.commit()
                 self.load_invoices()
                 messagebox.showinfo("Успех", "Накладная успешно удалена")
@@ -1579,6 +2267,15 @@ class WarehouseApp:
         item = self.warehouse_tree.item(selected[0])
         detail_id = item['values'][0]
         
+        # Check if detail is referenced in any invoices
+        self.cursor.execute("SELECT COUNT(*) FROM invoice_detail WHERE detailid = %s", (detail_id,))
+        reference_count = self.cursor.fetchone()[0]
+        
+        if reference_count > 0:
+            messagebox.showerror("Ошибка", 
+                            f"Невозможно удалить деталь: она используется в {reference_count} накладных")
+            return
+        
         if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите удалить деталь №{detail_id}?"):
             try:
                 self.cursor.execute("DELETE FROM details WHERE detail_id = %s", (detail_id,))
@@ -1590,6 +2287,119 @@ class WarehouseApp:
                 messagebox.showerror("Ошибка", f"Не удалось удалить деталь: {str(e)}")
     
     # Методы для работы с контрагентами
+    def search_counteragent(self):
+        """Поиск контрагентов по различным критериям"""
+        # Сохраняем текущие данные перед поиском
+        current_data = []
+        for item in self.counteragent_tree.get_children():
+            current_data.append(self.counteragent_tree.item(item)['values'])
+        
+        search_window = Toplevel(self.root)
+        search_window.title("Поиск контрагентов")
+        
+        # Создаем элементы формы для поиска
+        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
+        
+        # ID контрагента
+        Label(search_window, text="ID контрагента:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        id_var = StringVar()
+        id_entry = Entry(search_window, textvariable=id_var)
+        id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Название контрагента
+        Label(search_window, text="Название:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
+        name_var = StringVar()
+        name_entry = Entry(search_window, textvariable=name_var)
+        name_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Контактное лицо
+        Label(search_window, text="Контактное лицо:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
+        contact_var = StringVar()
+        contact_entry = Entry(search_window, textvariable=contact_var)
+        contact_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Телефон
+        Label(search_window, text="Телефон:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
+        phone_var = StringVar()
+        phone_entry = Entry(search_window, textvariable=phone_var)
+        phone_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Адрес
+        Label(search_window, text="Адрес:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
+        address_var = StringVar()
+        address_entry = Entry(search_window, textvariable=address_var)
+        address_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
+        
+        def perform_search():
+            try:
+                # Собираем условия для запроса
+                conditions = []
+                params = []
+                
+                if id_var.get():
+                    conditions.append("counteragent_id = %s")
+                    params.append(int(id_var.get()))
+                
+                if name_var.get():
+                    conditions.append("counteragent_name ILIKE %s")
+                    params.append(f"%{name_var.get()}%")
+                
+                if contact_var.get():
+                    conditions.append("contact_person ILIKE %s")
+                    params.append(f"%{contact_var.get()}%")
+                
+                if phone_var.get():
+                    conditions.append("phone_number::text LIKE %s")
+                    params.append(f"%{phone_var.get()}%")
+                
+                if address_var.get():
+                    conditions.append("address ILIKE %s")
+                    params.append(f"%{address_var.get()}%")
+                
+                # Формируем SQL запрос
+                query = "SELECT * FROM counteragent"
+                
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                
+                query += " ORDER BY counteragent_id"
+                
+                # Выполняем запрос
+                self.counteragent_tree.delete(*self.counteragent_tree.get_children())
+                self.cursor.execute(query, params)
+                
+                found_items = self.cursor.fetchall()
+                
+                if not found_items:
+                    messagebox.showinfo("Информация", "Контрагенты не найдены")
+                    # Восстанавливаем исходные данные
+                    self.counteragent_tree.delete(*self.counteragent_tree.get_children())
+                    for row in current_data:
+                        self.counteragent_tree.insert("", END, values=row)
+                    return
+                
+                for row in found_items:
+                    self.counteragent_tree.insert("", END, values=row)
+                
+                found_count = len(found_items)
+                self.status_bar.config(text=f"Найдено контрагентов: {found_count}")
+                search_window.destroy()
+                
+            except ValueError as ve:
+                messagebox.showerror("Ошибка", f"Некорректные данные: {str(ve)}")
+            except Exception as e:
+                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
+                self.conn.rollback()
+                # Восстанавливаем исходные данные при ошибке
+                self.counteragent_tree.delete(*self.counteragent_tree.get_children())
+                for row in current_data:
+                    self.counteragent_tree.insert("", END, values=row)
+        
+        Button(search_window, text="Найти", command=perform_search).grid(
+            row=6, column=0, padx=5, pady=10, sticky=EW)
+        Button(search_window, text="Сбросить", command=self.load_counteragents).grid(
+            row=6, column=1, padx=5, pady=10, sticky=EW)
+    
     def add_counteragent(self):
         """Добавление нового контрагента"""
         if not self.can_edit_counteragents:
@@ -1740,6 +2550,120 @@ class WarehouseApp:
                 messagebox.showerror("Ошибка", f"Не удалось удалить контрагента: {str(e)}")
     
     # Методы для работы с сотрудниками
+    def search_employee(self):
+        """Поиск сотрудников по различным критериям"""
+        # Сохраняем текущие данные перед поиском
+        current_data = []
+        for item in self.employee_tree.get_children():
+            current_data.append(self.employee_tree.item(item)['values'])
+        
+        search_window = Toplevel(self.root)
+        search_window.title("Поиск сотрудников")
+        
+        # Создаем элементы формы для поиска
+        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
+        
+        # ID сотрудника
+        Label(search_window, text="ID сотрудника:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        id_var = StringVar()
+        id_entry = Entry(search_window, textvariable=id_var)
+        id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Роль
+        Label(search_window, text="Роль:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
+        role_var = StringVar()
+        role_combobox = ttk.Combobox(search_window, textvariable=role_var, 
+                                    values=["", "Кладовщик", "Менеджер склада", "Владелец"])
+        role_combobox.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Фамилия
+        Label(search_window, text="Фамилия:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
+        last_name_var = StringVar()
+        last_name_entry = Entry(search_window, textvariable=last_name_var)
+        last_name_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Имя
+        Label(search_window, text="Имя:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
+        first_name_var = StringVar()
+        first_name_entry = Entry(search_window, textvariable=first_name_var)
+        first_name_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Отчество
+        Label(search_window, text="Отчество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
+        patronymic_var = StringVar()
+        patronymic_entry = Entry(search_window, textvariable=patronymic_var)
+        patronymic_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
+        
+        def perform_search():
+            try:
+                # Собираем условия для запроса
+                conditions = []
+                params = []
+                
+                if id_var.get():
+                    conditions.append("employee_id = %s")
+                    params.append(int(id_var.get()))
+                
+                if role_var.get():
+                    conditions.append("employee_role = %s")
+                    params.append(role_var.get())
+                
+                if last_name_var.get():
+                    conditions.append("last_name ILIKE %s")
+                    params.append(f"%{last_name_var.get()}%")
+                
+                if first_name_var.get():
+                    conditions.append("first_name ILIKE %s")
+                    params.append(f"%{first_name_var.get()}%")
+                
+                if patronymic_var.get():
+                    conditions.append("patronymic ILIKE %s")
+                    params.append(f"%{patronymic_var.get()}%")
+                
+                # Формируем SQL запрос
+                query = "SELECT * FROM employee"
+                
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                
+                query += " ORDER BY employee_id"
+                
+                # Выполняем запрос
+                self.employee_tree.delete(*self.employee_tree.get_children())
+                self.cursor.execute(query, params)
+                
+                found_items = self.cursor.fetchall()
+                
+                if not found_items:
+                    messagebox.showinfo("Информация", "Сотрудники не найдены")
+                    # Восстанавливаем исходные данные
+                    self.employee_tree.delete(*self.employee_tree.get_children())
+                    for row in current_data:
+                        self.employee_tree.insert("", END, values=row)
+                    return
+                
+                for row in found_items:
+                    self.employee_tree.insert("", END, values=row)
+                
+                found_count = len(found_items)
+                self.status_bar.config(text=f"Найдено сотрудников: {found_count}")
+                search_window.destroy()
+                
+            except ValueError as ve:
+                messagebox.showerror("Ошибка", f"Некорректные данные: {str(ve)}")
+            except Exception as e:
+                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
+                self.conn.rollback()
+                # Восстанавливаем исходные данные при ошибке
+                self.employee_tree.delete(*self.employee_tree.get_children())
+                for row in current_data:
+                    self.employee_tree.insert("", END, values=row)
+        
+        Button(search_window, text="Найти", command=perform_search).grid(
+            row=6, column=0, padx=5, pady=10, sticky=EW)
+        Button(search_window, text="Сбросить", command=self.load_employees).grid(
+            row=6, column=1, padx=5, pady=10, sticky=EW)
+    
     def add_employee(self):
         """Добавление нового сотрудника"""
         if not self.can_edit_employees:
@@ -1916,7 +2840,7 @@ def start_work():
         print("[AUTH] Login successful")
         window.destroy()
         main_win = Tk()
-        app = WarehouseApp(main_win, login, password, active_user)
+        app = WarehouseApp(main_win, login, password, active_user)  # Передаем пароль
         main_win.mainloop()
     else:
         print("[AUTH] Login failed")
