@@ -338,17 +338,6 @@ class WarehouseApp:
                 messagebox.showerror("Ошибка", f"Не удалось выполнить откат: {str(e)}")
                 self.conn.rollback()
 
-    def refresh_all_tabs(self):
-        """Обновляет все вкладки приложения"""
-        if hasattr(self, 'invoice_tree'):
-            self.load_invoices()
-        if hasattr(self, 'warehouse_tree'):
-            self.load_warehouse()
-        if hasattr(self, 'counteragent_tree'):
-            self.load_counteragents()
-        if hasattr(self, 'employee_tree'):
-            self.load_employees()
-
     def get_primary_key(self, table_name):
         """Возвращает имя первичного ключа для таблицы с обработкой исключений"""
         try:
