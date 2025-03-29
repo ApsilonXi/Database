@@ -643,9 +643,23 @@ class WarehouseApp:
         tree.pack(fill=BOTH, expand=True)
         
         # Функция загрузки данных
-        def load_data():
+        def load_data(reset_search=False):
+            """Загружает данные с учетом текущих условий поиска или сбрасывает их"""
+            if reset_search:
+                self.current_search_conditions[table_name] = None
+            
             tree.delete(*tree.get_children())
-            self.cursor.execute(f"SELECT * FROM {table_name} ORDER BY 1")
+            
+            if self.current_search_conditions.get(table_name):
+                # Загружаем с учетом текущего поиска
+                conditions = self.current_search_conditions[table_name]['conditions']
+                params = self.current_search_conditions[table_name]['params']
+                query = f"SELECT * FROM {table_name} WHERE " + " AND ".join(conditions) + " ORDER BY 1"
+                self.cursor.execute(query, params)
+            else:
+                # Загружаем все данные
+                self.cursor.execute(f"SELECT * FROM {table_name} ORDER BY 1")
+            
             for row in self.cursor.fetchall():
                 # Преобразуем ID в читаемые значения для внешних ключей
                 formatted_row = [row[0]]  # ID
@@ -664,11 +678,6 @@ class WarehouseApp:
         def search_items():
             search_window = Toplevel(self.root)
             search_window.title(f"Поиск в {table_name}")
-            
-            # Сохраняем текущие данные перед поиском
-            current_data = []
-            for item in tree.get_children():
-                current_data.append(tree.item(item)['values'])
             
             # Создаем элементы формы для поиска
             Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
@@ -714,60 +723,35 @@ class WarehouseApp:
                                 conditions.append(f"{col}::text LIKE %s")
                                 params.append(f"%{search_text}%")
                     
-                    query = f"SELECT * FROM {table_name}"
-                    if conditions:
-                        query += " WHERE " + " AND ".join(conditions)
-                    query += " ORDER BY 1"
+                    # Сохраняем условия поиска
+                    self.current_search_conditions[table_name] = {
+                        'conditions': conditions,
+                        'params': params
+                    }
                     
-                    tree.delete(*tree.get_children())
-                    self.cursor.execute(query, params)
-                    
-                    found_items = self.cursor.fetchall()
-                    
-                    if not found_items:
-                        messagebox.showinfo("Информация", "Записи не найдены")
-                        # Восстанавливаем исходные данные
-                        load_data()
-                        return
-                    
-                    for row in found_items:
-                        formatted_row = [row[0]]  # ID
-                        for i, col in enumerate(columns_en):
-                            if col.endswith("id"):
-                                ref_table = col.replace("id", "")
-                                self.cursor.execute(f"""
-                                    SELECT {ref_table}_number FROM {ref_table} 
-                                    WHERE {ref_table}_id = %s
-                                """, (row[i+1],))
-                                ref_number = self.cursor.fetchone()
-                                formatted_row.append(ref_number[0] if ref_number else "N/A")
-                            else:
-                                formatted_row.append(row[i+1])
-                        tree.insert("", END, values=formatted_row)
-                    
+                    # Обновляем данные с учетом поиска
+                    load_data(False)
                     search_window.destroy()
-                    messagebox.showinfo("Информация", f"Найдено {len(tree.get_children())} записей")
                     
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Ошибка поиска: {str(e)}")
                     self.conn.rollback()
-                    # Восстанавливаем исходные данные при ошибке
-                    load_data()
             
             Button(search_window, text="Найти", command=perform_search).grid(
                 row=len(columns_ru)+1, column=0, padx=5, pady=10, sticky=EW)
-            Button(search_window, text="Сбросить", command=load_data).grid(
+            Button(search_window, text="Сбросить", command=lambda: [self.current_search_conditions.update({table_name: None}), load_data(False), search_window.destroy()]).grid(
                 row=len(columns_ru)+1, column=1, padx=5, pady=10, sticky=EW)
         
         # Контекстное меню
         menu = Menu(parent, tearoff=0)
-        menu.add_command(label="Добавить", command=lambda: self.add_structure_item(table_name, columns_en, columns_ru, load_data))
-        menu.add_command(label="Изменить", command=lambda: self.edit_structure_item(tree, table_name, columns_en, columns_ru, load_data))
-        menu.add_command(label="Удалить", command=lambda: self.delete_structure_item(tree, table_name, load_data))
+        menu.add_command(label="Добавить", command=lambda: self.add_structure_item(table_name, columns_en, columns_ru, lambda: load_data(False)))
+        menu.add_command(label="Изменить", command=lambda: self.edit_structure_item(tree, table_name, columns_en, columns_ru, lambda: load_data(False)))
+        menu.add_command(label="Удалить", command=lambda: self.delete_structure_item(tree, table_name, lambda: load_data(False)))
         menu.add_separator()
         menu.add_command(label="Найти", command=search_items)  
         menu.add_separator()
-        menu.add_command(label="Обновить", command=load_data)  
+        menu.add_command(label="Обновить список", command=lambda: load_data(False))  # Обновит текущий список (после поиска)
+        menu.add_command(label="Обновить таблицу", command=lambda: load_data(True))  # Сбросит поиск и загрузит все данные
         
         def show_context_menu(event):
             item = tree.identify_row(event.y)
@@ -776,7 +760,7 @@ class WarehouseApp:
                 menu.post(event.x_root, event.y_root)
         
         tree.bind("<Button-3>", show_context_menu)
-        load_data()
+        load_data(False)  # Первоначальная загрузка
 
     def edit_warehouse_structure(self):
         """Редактирование структуры склада (склады, комнаты, стеллажи, полки)"""
@@ -1250,12 +1234,39 @@ class WarehouseApp:
             status_var.set("Завершено" if current_status else "В процессе")
             
             status_combobox = ttk.Combobox(status_window, textvariable=status_var, 
-                                         values=["В процессе", "Завершено"])
+                                        values=["В процессе", "Завершено"])
             status_combobox.pack(padx=5, pady=5)
             
             def save_status():
                 try:
                     new_status = status_var.get() == "Завершено"
+                    
+                    # Если статус меняется на "В процессе", проверяем количество накладных у сотрудника
+                    if not new_status:
+                        # Получаем ID ответственного
+                        self.cursor.execute("""
+                            SELECT responsible FROM invoice_employee 
+                            WHERE invoiceid = %s
+                        """, (invoice_id,))
+                        employee_id = self.cursor.fetchone()
+                        
+                        if employee_id:
+                            employee_id = employee_id[0]
+                            # Проверяем количество активных накладных
+                            self.cursor.execute("""
+                                SELECT COUNT(*) FROM invoice_employee 
+                                WHERE responsible = %s 
+                                AND invoiceid IN (SELECT invoice_id FROM invoice WHERE status = FALSE)
+                                AND invoiceid != %s
+                            """, (employee_id, invoice_id))
+                            active_invoices_count = self.cursor.fetchone()[0]
+                            
+                            if active_invoices_count >= 5:
+                                raise ValueError(
+                                    f"У сотрудника уже {active_invoices_count} активных накладных. "
+                                    "Максимум - 5. Нельзя изменить статус."
+                                )
+                    
                     self.cursor.execute("""
                         UPDATE invoice SET status = %s WHERE invoice_id = %s
                     """, (new_status, invoice_id))
@@ -1264,6 +1275,8 @@ class WarehouseApp:
                     self.load_invoices()
                     status_window.destroy()
                     messagebox.showinfo("Успех", "Статус накладной обновлен")
+                except ValueError as ve:
+                    messagebox.showerror("Ошибка", str(ve))
                 except Exception as e:
                     print(f"[UPDATE ERROR] Failed to update invoice status: {e}")
                     self.conn.rollback()
@@ -2083,6 +2096,19 @@ class WarehouseApp:
                     # Получаем ID из выбранных значений через словари
                     counteragent_id = counteragent_ids.get(counteragent_var.get())
                     employee_id = employee_ids.get(employee_var.get())
+
+                    # Проверка количества накладных у сотрудника (новый код)
+                    if employee_id:
+                        self.cursor.execute("""
+                            SELECT COUNT(*) FROM invoice_employee 
+                            WHERE responsible = %s AND invoiceid IN (
+                                SELECT invoice_id FROM invoice WHERE status = FALSE
+                            )
+                        """, (employee_id,))
+                        active_invoices_count = self.cursor.fetchone()[0]
+                        
+                        if active_invoices_count >= 5:
+                            raise ValueError(f"У сотрудника уже {active_invoices_count} активных накладных. Максимум - 5.")
                     
                     if None in (counteragent_id, employee_id):
                         raise ValueError("Не все обязательные поля заполнены")
@@ -2092,7 +2118,7 @@ class WarehouseApp:
                     if not detail_name:
                         raise ValueError("Название детали не может быть пустым")
                     
-                    # Проверяем, есть ли такая деталь на складе
+                    # Получаем ID и тип детали
                     self.cursor.execute("""
                         SELECT detail_id FROM details 
                         WHERE type_detail = %s
@@ -2106,7 +2132,7 @@ class WarehouseApp:
                     detail_id = detail_data[0]
                     
                     # Преобразуем тип и статус
-                    type_invoice = type_var.get() == "Выгрузка"
+                    type_invoice = type_var.get() == "Выгрузка"  # True - выгрузка, False - отгрузка
                     status = status_var.get() == "Завершено"
                     
                     # Получаем количество
@@ -2116,6 +2142,34 @@ class WarehouseApp:
                             raise ValueError("Количество должно быть положительным числом")
                     except ValueError:
                         raise ValueError("Количество должно быть целым числом")
+                    
+                    # Проверка доступности деталей
+                    if not type_invoice:  # Только для отгрузки (не для выгрузки)
+                        # 1. Получаем общее количество деталей этого типа на складе
+                        self.cursor.execute("""
+                            SELECT COUNT(*) 
+                            FROM details 
+                            WHERE type_detail = %s
+                        """, (detail_name,))
+                        total_available = self.cursor.fetchone()[0]
+                        
+                        # 2. Получаем сумму всех запланированных к отгрузке деталей ЭТОГО ТИПА
+                        self.cursor.execute("""
+                            SELECT COALESCE(SUM(id.quantity), 0)
+                            FROM invoice_detail id
+                            JOIN invoice i ON id.invoiceid = i.invoice_id
+                            JOIN details d ON id.detailid = d.detail_id
+                            WHERE d.type_detail = %s AND i.type_invoice = FALSE AND i.status = FALSE
+                        """, (detail_name,))
+                        reserved = self.cursor.fetchone()[0]
+                        
+                        # 3. Проверяем доступность
+                        if total_available < (reserved + quantity):
+                            raise ValueError(
+                                f"Недостаточно деталей на складе для отгрузки. Доступно: {total_available}, "
+                                f"уже зарезервировано для отгрузки: {reserved}, требуется: {quantity}"
+                            )
+                    # ===== КОНЕЦ НОВОГО КОДА =====
                     
                     # Вставляем накладную
                     self.cursor.execute("""
@@ -2294,9 +2348,69 @@ class WarehouseApp:
                     counteragent_id = int(counteragent_var.get().split(":")[0])
                     employee_id = employee_ids.get(employee_var.get())
                     
+                    # Проверка количества накладных у сотрудника (НОВЫЙ КОД)
+                    if employee_id:
+                        self.cursor.execute("""
+                            SELECT COUNT(*) FROM invoice_employee 
+                            WHERE responsible = %s 
+                            AND invoiceid IN (SELECT invoice_id FROM invoice WHERE status = FALSE)
+                            AND invoiceid != %s
+                        """, (employee_id, invoice_id))
+                        active_invoices_count = self.cursor.fetchone()[0]
+                        
+                        if active_invoices_count >= 5:
+                            raise ValueError(f"У сотрудника уже {active_invoices_count} активных накладных. Максимум - 5.")
+                    
                     # Преобразуем тип и статус
                     type_invoice = type_var.get() == "Выгрузка"
                     status = status_var.get() == "Завершено"
+                    
+                    # Проверка доступности деталей
+                    if not type_invoice:  # Если это отгрузка
+                        # 1. Получаем текущее количество в этой накладной (если было)
+                        self.cursor.execute("""
+                            SELECT quantity FROM invoice_detail 
+                            WHERE invoiceid = %s
+                        """, (invoice_id,))
+                        old_quantity_row = self.cursor.fetchone()
+                        old_quantity = old_quantity_row[0] if old_quantity_row else 0
+                        
+                        # 2. Получаем ФАКТИЧЕСКОЕ количество деталей этого типа на складе
+                        self.cursor.execute("""
+                            SELECT COUNT(*) 
+                            FROM details d
+                            WHERE d.type_detail = %s
+                            AND NOT EXISTS (
+                                SELECT 1 FROM invoice_detail id
+                                JOIN invoice i ON id.invoiceid = i.invoice_id
+                                WHERE id.detailid = d.detail_id 
+                                AND i.type_invoice = FALSE  --- отгрузка
+                                AND i.status = TRUE  --- завершённые
+                            )
+                        """, (detail_name,))
+                        total_available = self.cursor.fetchone()[0]
+                        
+                        # 3. Получаем сумму всех НЕЗАВЕРШЁННЫХ отгрузок этого типа
+                        self.cursor.execute("""
+                            SELECT COALESCE(SUM(id.quantity), 0)
+                            FROM invoice_detail id
+                            JOIN invoice i ON id.invoiceid = i.invoice_id
+                            JOIN details d ON id.detailid = d.detail_id
+                            WHERE d.type_detail = %s 
+                            AND i.type_invoice = FALSE  --- отгрузка
+                            AND i.status = FALSE  --- в процессе
+                            AND i.invoice_id != %s
+                        """, (detail_name, invoice_id))
+                        reserved = self.cursor.fetchone()[0]
+                        
+                        # 4. Проверяем доступность с учётом изменений
+                        if total_available < (reserved + quantity - old_quantity):
+                            raise ValueError(
+                                f"Недостаточно деталей на складе для отгрузки. "
+                                f"Доступно: {total_available}, "
+                                f"уже зарезервировано в других накладных: {reserved}, "
+                                f"новое количество: {quantity} (было: {old_quantity})"
+                            )
                     
                     # Обновляем накладную
                     self.cursor.execute("""
@@ -2575,6 +2689,15 @@ class WarehouseApp:
                             raise ValueError("Вес не может быть отрицательным")
                     except ValueError as e:
                         raise ValueError("Вес должен быть числом (например, 2.1)")
+                    
+                    # Проверка количества деталей на полке (новый код)
+                    self.cursor.execute("""
+                        SELECT COUNT(*) FROM details WHERE shelfid = %s
+                    """, (shelf_id,))
+                    details_count = self.cursor.fetchone()[0]
+                    
+                    if details_count >= 5:
+                        raise ValueError(f"На полке уже {details_count} деталей. Максимум - 5.")
 
                     # Вставляем деталь
                     self.cursor.execute("""
@@ -2821,6 +2944,16 @@ class WarehouseApp:
                     if not shelf_data:
                         raise ValueError("Полка не найдена в базе данных")
                     shelf_id = shelf_data[0]
+                    
+                    # Проверка количества деталей на полке (НОВЫЙ КОД)
+                    if shelf_id != detail_data[3]:  # Если полка изменилась
+                        self.cursor.execute("""
+                            SELECT COUNT(*) FROM details WHERE shelfid = %s
+                        """, (shelf_id,))
+                        details_count = self.cursor.fetchone()[0]
+                        
+                        if details_count >= 5:
+                            raise ValueError(f"На полке уже {details_count} деталей. Максимум - 5.")
                     
                     # Получаем тип детали и вес
                     type_detail = type_var.get()
