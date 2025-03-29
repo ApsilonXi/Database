@@ -2282,7 +2282,8 @@ class WarehouseApp:
             # Получаем списки для выпадающих списков
             self.cursor.execute("SELECT counteragent_id, counteragent_name FROM counteragent")
             counteragents = self.cursor.fetchall()
-            counteragent_names = [f"{id}: {name}" for id, name in counteragents]
+            counteragent_names = [name for id, name in counteragents]
+            counteragent_ids = {name: id for id, name in counteragents}
             
             self.cursor.execute("""
                 SELECT DISTINCT 
@@ -2300,13 +2301,14 @@ class WarehouseApp:
             # Создаем элементы формы с текущими значениями
             Label(edit_window, text="Контрагент:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
             counteragent_var = StringVar()
-            counteragent_combobox = ttk.Combobox(edit_window, textvariable=counteragent_var, values=counteragent_names)
+            counteragent_combobox = ttk.Combobox(edit_window, textvariable=counteragent_var, 
+                                            values=counteragent_names)
             counteragent_combobox.grid(row=0, column=1, padx=5, pady=5, sticky=EW)
             
             # Устанавливаем текущее значение контрагента
             for id, name in counteragents:
                 if name == invoice_data[1]:  # invoice_data[1] — это counteragent_name
-                    counteragent_var.set(f"{id}: {name}")
+                    counteragent_var.set(invoice_data[1])
                     break
             
             Label(edit_window, text="Дата и время:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
@@ -2316,13 +2318,15 @@ class WarehouseApp:
             
             Label(edit_window, text="Тип накладной:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
             type_var = StringVar()
-            type_combobox = ttk.Combobox(edit_window, textvariable=type_var, values=["Отгрузка", "Выгрузка"])
+            type_combobox = ttk.Combobox(edit_window, textvariable=type_var, 
+                                        values=["Отгрузка", "Выгрузка"])
             type_combobox.current(1 if invoice_data[3] == "Выгрузка" else 0)
             type_combobox.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
             
             Label(edit_window, text="Статус:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
             status_var = StringVar()
-            status_combobox = ttk.Combobox(edit_window, textvariable=status_var, values=["В процессе", "Завершено"])
+            status_combobox = ttk.Combobox(edit_window, textvariable=status_var, 
+                                        values=["В процессе", "Завершено"])
             status_combobox.current(1 if invoice_data[4] == "Завершено" else 0)
             status_combobox.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
             
@@ -2339,7 +2343,8 @@ class WarehouseApp:
             
             Label(edit_window, text="Ответственный:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
             employee_var = StringVar()
-            employee_combobox = ttk.Combobox(edit_window, textvariable=employee_var, values=employee_names)
+            employee_combobox = ttk.Combobox(edit_window, textvariable=employee_var, 
+                                            values=employee_names)
             employee_combobox.grid(row=6, column=1, padx=5, pady=5, sticky=EW)
             
             # Устанавливаем текущее значение сотрудника
@@ -2375,11 +2380,21 @@ class WarehouseApp:
                     except ValueError:
                         raise ValueError("Количество должно быть целым числом!")
                     
-                    # Получаем ID из выбранных значений
-                    counteragent_id = int(counteragent_var.get().split(":")[0])
-                    employee_id = employee_ids.get(employee_var.get())
+                    # Получаем ID контрагента из словаря
+                    counteragent_name = counteragent_var.get()
+                    counteragent_id = counteragent_ids.get(counteragent_name)
                     
-                    # Проверка количества накладных у сотрудника (НОВЫЙ КОД)
+                    if counteragent_id is None:
+                        raise ValueError("Выберите корректного контрагента")
+                    
+                    # Получаем ID сотрудника из словаря
+                    employee_name = employee_var.get()
+                    employee_id = employee_ids.get(employee_name)
+                    
+                    if employee_id is None:
+                        raise ValueError("Выберите корректного сотрудника")
+                    
+                    # Проверка количества накладных у сотрудника
                     if employee_id:
                         self.cursor.execute("""
                             SELECT COUNT(*) FROM invoice_employee 
@@ -2478,7 +2493,7 @@ class WarehouseApp:
             
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось открыть форму: {str(e)}")
-    
+        
     def delete_invoice(self):
         """Удаление накладной с предварительным удалением связанных записей"""
         selected = self.invoice_tree.selection()
