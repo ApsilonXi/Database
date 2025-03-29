@@ -21,7 +21,6 @@ class WarehouseApp:
             'counteragent': None,
             'employee': None
         }
-        self.is_search_active = False
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         
@@ -88,9 +87,7 @@ class WarehouseApp:
             return
             
         tree.selection_set(item)
-        
         menu = Menu(self.root, tearoff=0)
-        
         for label, command in menu_items:
             if command:
                 menu.add_command(label=label, command=command)
@@ -100,13 +97,13 @@ class WarehouseApp:
         # Добавляем пункт для принудительного обновления
         menu.add_separator()
         if tree == self.invoice_tree:
-            menu.add_command(label="Обновить таблицу", command=self.load_invoices)
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'invoice': None}), self.load_invoices()])
         elif tree == self.warehouse_tree:
-            menu.add_command(label="Обновить таблицу", command=self.load_warehouse)
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'warehouse': None}), self.load_warehouse()])
         elif tree == self.counteragent_tree:
-            menu.add_command(label="Обновить таблицу", command=self.load_counteragents)
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'counteragent': None}), self.load_counteragents()])
         elif tree == self.employee_tree:
-            menu.add_command(label="Обновить таблицу", command=self.load_employees)
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'employee': None}), self.load_employees()])
         
         try:
             menu.tk_popup(event.x_root, event.y_root)
@@ -919,8 +916,8 @@ class WarehouseApp:
                 
                 self.conn.commit()
                 add_window.destroy()
-                callback()
                 messagebox.showinfo("Успех", "Запись успешно добавлена")
+                # УБИРАЕМ автоматический вызов callback()
             except ValueError as ve:
                 messagebox.showerror("Ошибка", str(ve))
             except Exception as e:
@@ -931,7 +928,7 @@ class WarehouseApp:
             row=len(columns_en), column=0, columnspan=2, pady=10)
 
     def edit_structure_item(self, tree, table_name, columns_en, columns_ru, callback):
-        """Редактирует элемент структуры склада с проверкой уникальности"""
+        """Редактирует элемент структуры склада без автоматического обновления"""
         selected = tree.selection()
         if not selected:
             messagebox.showwarning("Предупреждение", "Выберите запись для редактирования")
@@ -1046,8 +1043,8 @@ class WarehouseApp:
                 
                 self.conn.commit()
                 edit_window.destroy()
-                callback()
                 messagebox.showinfo("Успех", "Запись успешно обновлена")
+                # УБИРАЕМ автоматический вызов callback()
             except ValueError as ve:
                 messagebox.showerror("Ошибка", str(ve))
             except Exception as e:
@@ -1108,10 +1105,9 @@ class WarehouseApp:
                     return
             
             # Выполняем удаление
-            self.cursor.execute(f"DELETE FROM {table_name} WHERE {table_name}_id = %s", (item_id,))
             self.conn.commit()
-            callback()
             messagebox.showinfo("Успех", "Запись успешно удалена")
+            # УБИРАЕМ автоматический вызов callback()
         except psycopg2.Error as e:
             self.conn.rollback()
             error_msg = f"Ошибка удаления: {str(e)}"
@@ -1178,8 +1174,6 @@ class WarehouseApp:
         except psycopg2.Error as e:
             print(f"[VIEW ERROR] Failed to access view: {e}")
             messagebox.showerror("Ошибка", "Не удалось получить доступ к данным. Проверьте права доступа.")
-
-    
 
     def create_invoice_tab(self):
         """Создание вкладки для работы с накладными с учетом прав доступа"""
@@ -1431,96 +1425,64 @@ class WarehouseApp:
     
     # Методы загрузки данных
     def load_invoices(self):
-        """Загрузка данных о накладных с использованием представления"""
+        """Загрузка данных о накладных"""
         try:
             self.invoice_tree.delete(*self.invoice_tree.get_children())
-            self.cursor.execute("""
-                SELECT 
-                    invoice_id,
-                    counteragent_name,
-                    date_time,
-                    type_invoice_text,
-                    status_text,
-                    type_detail,
-                    quantity,
-                    responsible_last_name || ' ' || 
-                    responsible_first_name || ' ' || 
-                    COALESCE(responsible_patronymic, '') as responsible
-                FROM invoice_details_view
-                ORDER BY invoice_id
-            """)
+            
+            if self.current_search_conditions['invoice']:
+                # Если есть активный поиск, загружаем только найденные записи
+                conditions = self.current_search_conditions['invoice']['conditions']
+                params = self.current_search_conditions['invoice']['params']
+                query = """
+                    SELECT 
+                        invoice_id,
+                        counteragent_name,
+                        date_time,
+                        type_invoice_text,
+                        status_text,
+                        type_detail,
+                        quantity,
+                        responsible_last_name || ' ' || 
+                        responsible_first_name || ' ' || 
+                        COALESCE(responsible_patronymic, '') as responsible
+                    FROM invoice_details_view
+                    WHERE """ + " AND ".join(conditions) + """
+                    ORDER BY invoice_id
+                """
+                self.cursor.execute(query, params)
+            else:
+                # Иначе загружаем все данные
+                self.cursor.execute("""
+                    SELECT 
+                        invoice_id,
+                        counteragent_name,
+                        date_time,
+                        type_invoice_text,
+                        status_text,
+                        type_detail,
+                        quantity,
+                        responsible_last_name || ' ' || 
+                        responsible_first_name || ' ' || 
+                        COALESCE(responsible_patronymic, '') as responsible
+                    FROM invoice_details_view
+                    ORDER BY invoice_id
+                """)
             
             for row in self.cursor.fetchall():
                 self.invoice_tree.insert("", END, values=row)
             
-            self.status_bar.config(text="Накладные загружены")
+            count = len(self.invoice_tree.get_children())
+            if self.current_search_conditions['invoice']:
+                self.status_bar.config(text=f"Найдено накладных: {count}")
+            else:
+                self.status_bar.config(text=f"Накладные загружены. Всего: {count}")
         except Exception as e:
             print(f"[LOAD ERROR] Failed to load invoices: {e}")
             self.status_bar.config(text=f"Ошибка загрузки накладных: {str(e)}")
-            # Важно сделать rollback при ошибке
             self.conn.rollback()
-    
-    def load_warehouse(self):
-        """Загрузка данных о складе с использованием представления"""
-        try:
-            self.warehouse_tree.delete(*self.warehouse_tree.get_children())
-            self.cursor.execute("""
-                SELECT 
-                    detail_id,
-                    warehouse_number,
-                    room_number,
-                    rack_number,
-                    shelf_number,
-                    type_detail,
-                    weight
-                FROM warehouse_details_view
-                ORDER BY detail_id, warehouse_number, room_number, rack_number, shelf_number
-            """)
-            
-            for row in self.cursor.fetchall():
-                self.warehouse_tree.insert("", END, values=row)
-            
-            self.status_bar.config(text="Данные склада загружены")
-        except Exception as e:
-            print(f"[LOAD ERROR] Failed to load warehouse data: {e}")
-            self.status_bar.config(text=f"Ошибка загрузки данных склада: {str(e)}")
-            self.conn.rollback()
-            
-    
-    def load_counteragents(self):
-        """Загрузка данных о контрагентах"""
-        try:
-            self.counteragent_tree.delete(*self.counteragent_tree.get_children())
-            self.cursor.execute("SELECT * FROM counteragent ORDER BY counteragent_id")
-            
-            for row in self.cursor.fetchall():
-                self.counteragent_tree.insert("", END, values=row)
-            
-            self.status_bar.config(text="Контрагенты загружены")
-        except Exception as e:
-            self.status_bar.config(text=f"Ошибка: {str(e)}")
-    
-    def load_employees(self):
-        """Загрузка данных о сотрудниках"""
-        try:
-            self.employee_tree.delete(*self.employee_tree.get_children())
-            self.cursor.execute("SELECT * FROM employee ORDER BY employee_id")
-            
-            for row in self.cursor.fetchall():
-                self.employee_tree.insert("", END, values=row)
-            
-            self.status_bar.config(text="Сотрудники загружены")
-        except Exception as e:
-            self.status_bar.config(text=f"Ошибка: {str(e)}")
-    
-    # Методы для работы с накладными
+
     def search_invoice(self):
         """Поиск накладных по различным критериям"""
-        # Сохраняем текущие данные перед поиском
-        current_data = []
-        for item in self.invoice_tree.get_children():
-            current_data.append(self.invoice_tree.item(item)['values'])
-        
         search_window = Toplevel(self.root)
         search_window.title("Поиск накладных")
         
@@ -1572,7 +1534,6 @@ class WarehouseApp:
         
         def perform_search():
             try:
-                # Собираем условия для запроса
                 conditions = []
                 params = []
                 
@@ -1612,46 +1573,14 @@ class WarehouseApp:
                         f"%{responsible_var.get()}%"
                     ])
                 
-                # Формируем SQL запрос
-                query = """
-                    SELECT 
-                        invoice_id,
-                        counteragent_name,
-                        date_time,
-                        type_invoice_text,
-                        status_text,
-                        type_detail,
-                        quantity,
-                        responsible_last_name || ' ' || 
-                        responsible_first_name || ' ' || 
-                        COALESCE(responsible_patronymic, '') as responsible
-                    FROM invoice_details_view
-                """
+                # Сохраняем условия поиска
+                self.current_search_conditions['invoice'] = {
+                    'conditions': conditions,
+                    'params': params
+                }
                 
-                if conditions:
-                    query += " WHERE " + " AND ".join(conditions)
-                
-                query += " ORDER BY invoice_id"
-                
-                # Выполняем запрос
-                self.invoice_tree.delete(*self.invoice_tree.get_children())
-                self.cursor.execute(query, params)
-                
-                found_items = self.cursor.fetchall()
-                
-                if not found_items:
-                    messagebox.showinfo("Информация", "Накладные не найдены")
-                    # Восстанавливаем исходные данные
-                    self.invoice_tree.delete(*self.invoice_tree.get_children())
-                    for row in current_data:
-                        self.invoice_tree.insert("", END, values=row)
-                    return
-                
-                for row in found_items:
-                    self.invoice_tree.insert("", END, values=row)
-                
-                found_count = len(found_items)
-                self.status_bar.config(text=f"Найдено накладных: {found_count}")
+                # Выполняем поиск и обновляем таблицу
+                self.load_invoices()
                 search_window.destroy()
                 
             except ValueError as ve:
@@ -1659,16 +1588,409 @@ class WarehouseApp:
             except Exception as e:
                 self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
                 self.conn.rollback()
-                # Восстанавливаем исходные данные при ошибке
-                self.invoice_tree.delete(*self.invoice_tree.get_children())
-                for row in current_data:
-                    self.invoice_tree.insert("", END, values=row)
+
+        def reset_search():
+            self.current_search_conditions['invoice'] = None
+            self.load_invoices()
+            search_window.destroy()
         
         Button(search_window, text="Найти", command=perform_search).grid(
             row=9, column=0, padx=5, pady=10, sticky=EW)
-        Button(search_window, text="Сбросить", command=self.load_invoices).grid(
+        Button(search_window, text="Сбросить", command=reset_search).grid(
             row=9, column=1, padx=5, pady=10, sticky=EW)
     
+    def load_warehouse(self):
+        """Загрузка данных о складе"""
+        try:
+            self.warehouse_tree.delete(*self.warehouse_tree.get_children())
+            
+            if self.current_search_conditions['warehouse']:
+                conditions = self.current_search_conditions['warehouse']['conditions']
+                params = self.current_search_conditions['warehouse']['params']
+                query = """
+                    SELECT 
+                        detail_id,
+                        warehouse_number,
+                        room_number,
+                        rack_number,
+                        shelf_number,
+                        type_detail,
+                        weight
+                    FROM warehouse_details_view
+                    WHERE """ + " AND ".join(conditions) + """
+                    ORDER BY detail_id, warehouse_number, room_number, rack_number, shelf_number
+                """
+                self.cursor.execute(query, params)
+            else:
+                self.cursor.execute("""
+                    SELECT 
+                        detail_id,
+                        warehouse_number,
+                        room_number,
+                        rack_number,
+                        shelf_number,
+                        type_detail,
+                        weight
+                    FROM warehouse_details_view
+                    ORDER BY detail_id, warehouse_number, room_number, rack_number, shelf_number
+                """)
+            
+            for row in self.cursor.fetchall():
+                self.warehouse_tree.insert("", END, values=row)
+            
+            count = len(self.warehouse_tree.get_children())
+            if self.current_search_conditions['warehouse']:
+                self.status_bar.config(text=f"Найдено деталей: {count}")
+            else:
+                self.status_bar.config(text=f"Данные склада загружены. Всего: {count}")
+        except Exception as e:
+            print(f"[LOAD ERROR] Failed to load warehouse data: {e}")
+            self.status_bar.config(text=f"Ошибка загрузки данных склада: {str(e)}")
+            self.conn.rollback()
+
+    def search_warehouse_item(self):
+        """Поиск деталей на складе по различным критериям"""
+        search_window = Toplevel(self.root)
+        search_window.title("Поиск деталей на складе")
+        
+        # Создаем элементы формы для поиска
+        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
+        
+        # Тип детали
+        Label(search_window, text="Тип детали:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        type_var = StringVar()
+        type_entry = Entry(search_window, textvariable=type_var)
+        type_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Номер склада
+        Label(search_window, text="Номер склада:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
+        warehouse_var = StringVar()
+        warehouse_entry = Entry(search_window, textvariable=warehouse_var)
+        warehouse_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Номер комнаты
+        Label(search_window, text="Номер комнаты:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
+        room_var = StringVar()
+        room_entry = Entry(search_window, textvariable=room_var)
+        room_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Номер стеллажа
+        Label(search_window, text="Номер стеллажа:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
+        rack_var = StringVar()
+        rack_entry = Entry(search_window, textvariable=rack_var)
+        rack_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Номер полки
+        Label(search_window, text="Номер полки:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
+        shelf_var = StringVar()
+        shelf_entry = Entry(search_window, textvariable=shelf_var)
+        shelf_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Вес (от и до)
+        Label(search_window, text="Вес от:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
+        weight_from_var = StringVar()
+        weight_from_entry = Entry(search_window, textvariable=weight_from_var)
+        weight_from_entry.grid(row=6, column=1, padx=5, pady=5, sticky=EW)
+        
+        Label(search_window, text="Вес до:").grid(row=7, column=0, padx=5, pady=5, sticky=W)
+        weight_to_var = StringVar()
+        weight_to_entry = Entry(search_window, textvariable=weight_to_var)
+        weight_to_entry.grid(row=7, column=1, padx=5, pady=5, sticky=EW)
+        
+        def perform_search():
+            try:
+                conditions = []
+                params = []
+                
+                if type_var.get():
+                    conditions.append("type_detail ILIKE %s")
+                    params.append(f"%{type_var.get()}%")
+                
+                if warehouse_var.get():
+                    conditions.append("warehouse_number = %s")
+                    params.append(warehouse_var.get())
+                
+                if room_var.get():
+                    conditions.append("room_number = %s")
+                    params.append(room_var.get())
+                
+                if rack_var.get():
+                    conditions.append("rack_number = %s")
+                    params.append(rack_var.get())
+                
+                if shelf_var.get():
+                    conditions.append("shelf_number = %s")
+                    params.append(shelf_var.get())
+                
+                if weight_from_var.get():
+                    try:
+                        weight_from = float(weight_from_var.get())
+                        conditions.append("weight >= %s")
+                        params.append(weight_from)
+                    except ValueError:
+                        messagebox.showwarning("Предупреждение", "Некорректное значение веса 'от'")
+                
+                if weight_to_var.get():
+                    try:
+                        weight_to = float(weight_to_var.get())
+                        conditions.append("weight <= %s")
+                        params.append(weight_to)
+                    except ValueError:
+                        messagebox.showwarning("Предупреждение", "Некорректное значение веса 'до'")
+                
+                # Сохраняем условия поиска
+                self.current_search_conditions['warehouse'] = {
+                    'conditions': conditions,
+                    'params': params
+                }
+                
+                # Выполняем поиск и обновляем таблицу
+                self.load_warehouse()
+                search_window.destroy()
+                
+            except Exception as e:
+                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
+                self.conn.rollback()
+
+        def reset_search():
+            self.current_search_conditions['warehouse'] = None
+            self.load_warehouse()
+            search_window.destroy()
+        
+        Button(search_window, text="Найти", command=perform_search).grid(
+            row=8, column=0, padx=5, pady=10, sticky=EW)
+        Button(search_window, text="Сбросить", command=reset_search).grid(
+            row=8, column=1, padx=5, pady=10, sticky=EW)
+            
+    
+    def load_counteragents(self):
+        """Загрузка данных о контрагентах"""
+        try:
+            self.counteragent_tree.delete(*self.counteragent_tree.get_children())
+            
+            if self.current_search_conditions['counteragent']:
+                conditions = self.current_search_conditions['counteragent']['conditions']
+                params = self.current_search_conditions['counteragent']['params']
+                query = "SELECT * FROM counteragent WHERE " + " AND ".join(conditions) + " ORDER BY counteragent_id"
+                self.cursor.execute(query, params)
+            else:
+                self.cursor.execute("SELECT * FROM counteragent ORDER BY counteragent_id")
+            
+            for row in self.cursor.fetchall():
+                self.counteragent_tree.insert("", END, values=row)
+            
+            count = len(self.counteragent_tree.get_children())
+            if self.current_search_conditions['counteragent']:
+                self.status_bar.config(text=f"Найдено контрагентов: {count}")
+            else:
+                self.status_bar.config(text=f"Контрагенты загружены. Всего: {count}")
+        except Exception as e:
+            self.status_bar.config(text=f"Ошибка: {str(e)}")
+
+    def search_counteragent(self):
+        """Поиск контрагентов по различным критериям"""
+        search_window = Toplevel(self.root)
+        search_window.title("Поиск контрагентов")
+        
+        # Создаем элементы формы для поиска
+        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
+        
+        # ID контрагента
+        Label(search_window, text="ID контрагента:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        id_var = StringVar()
+        id_entry = Entry(search_window, textvariable=id_var)
+        id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Название контрагента
+        Label(search_window, text="Название:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
+        name_var = StringVar()
+        name_entry = Entry(search_window, textvariable=name_var)
+        name_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Контактное лицо
+        Label(search_window, text="Контактное лицо:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
+        contact_var = StringVar()
+        contact_entry = Entry(search_window, textvariable=contact_var)
+        contact_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Телефон
+        Label(search_window, text="Телефон:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
+        phone_var = StringVar()
+        phone_entry = Entry(search_window, textvariable=phone_var)
+        phone_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Адрес
+        Label(search_window, text="Адрес:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
+        address_var = StringVar()
+        address_entry = Entry(search_window, textvariable=address_var)
+        address_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
+        
+        def perform_search():
+            try:
+                conditions = []
+                params = []
+                
+                if id_var.get():
+                    conditions.append("counteragent_id = %s")
+                    params.append(int(id_var.get()))
+                
+                if name_var.get():
+                    conditions.append("counteragent_name ILIKE %s")
+                    params.append(f"%{name_var.get()}%")
+                
+                if contact_var.get():
+                    conditions.append("contact_person ILIKE %s")
+                    params.append(f"%{contact_var.get()}%")
+                
+                if phone_var.get():
+                    conditions.append("phone_number::text LIKE %s")
+                    params.append(f"%{phone_var.get()}%")
+                
+                if address_var.get():
+                    conditions.append("address ILIKE %s")
+                    params.append(f"%{address_var.get()}%")
+                
+                # Сохраняем условия поиска
+                self.current_search_conditions['counteragent'] = {
+                    'conditions': conditions,
+                    'params': params
+                }
+                
+                # Выполняем поиск и обновляем таблицу
+                self.load_counteragents()
+                search_window.destroy()
+                
+            except ValueError as ve:
+                messagebox.showerror("Ошибка", f"Некорректные данные: {str(ve)}")
+            except Exception as e:
+                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
+                self.conn.rollback()
+
+        def reset_search():
+            self.current_search_conditions['counteragent'] = None
+            self.load_counteragents()
+            search_window.destroy()
+        
+        Button(search_window, text="Найти", command=perform_search).grid(
+            row=6, column=0, padx=5, pady=10, sticky=EW)
+        Button(search_window, text="Сбросить", command=reset_search).grid(
+            row=6, column=1, padx=5, pady=10, sticky=EW)
+    
+    def load_employees(self):
+        """Загрузка данных о сотрудниках"""
+        try:
+            self.employee_tree.delete(*self.employee_tree.get_children())
+            
+            if self.current_search_conditions['employee']:
+                conditions = self.current_search_conditions['employee']['conditions']
+                params = self.current_search_conditions['employee']['params']
+                query = "SELECT * FROM employee WHERE " + " AND ".join(conditions) + " ORDER BY employee_id"
+                self.cursor.execute(query, params)
+            else:
+                self.cursor.execute("SELECT * FROM employee ORDER BY employee_id")
+            
+            for row in self.cursor.fetchall():
+                self.employee_tree.insert("", END, values=row)
+            
+            count = len(self.employee_tree.get_children())
+            if self.current_search_conditions['employee']:
+                self.status_bar.config(text=f"Найдено сотрудников: {count}")
+            else:
+                self.status_bar.config(text=f"Сотрудники загружены. Всего: {count}")
+        except Exception as e:
+            self.status_bar.config(text=f"Ошибка: {str(e)}")
+
+    def search_employee(self):
+        """Поиск сотрудников по различным критериям"""
+        search_window = Toplevel(self.root)
+        search_window.title("Поиск сотрудников")
+        
+        # Создаем элементы формы для поиска
+        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
+        
+        # ID сотрудника
+        Label(search_window, text="ID сотрудника:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        id_var = StringVar()
+        id_entry = Entry(search_window, textvariable=id_var)
+        id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Роль
+        Label(search_window, text="Роль:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
+        role_var = StringVar()
+        role_combobox = ttk.Combobox(search_window, textvariable=role_var, 
+                                    values=["", "Кладовщик", "Менеджер склада", "Владелец"])
+        role_combobox.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Фамилия
+        Label(search_window, text="Фамилия:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
+        last_name_var = StringVar()
+        last_name_entry = Entry(search_window, textvariable=last_name_var)
+        last_name_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Имя
+        Label(search_window, text="Имя:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
+        first_name_var = StringVar()
+        first_name_entry = Entry(search_window, textvariable=first_name_var)
+        first_name_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
+        
+        # Отчество
+        Label(search_window, text="Отчество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
+        patronymic_var = StringVar()
+        patronymic_entry = Entry(search_window, textvariable=patronymic_var)
+        patronymic_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
+        
+        def perform_search():
+            try:
+                conditions = []
+                params = []
+                
+                if id_var.get():
+                    conditions.append("employee_id = %s")
+                    params.append(int(id_var.get()))
+                
+                if role_var.get():
+                    conditions.append("employee_role = %s")
+                    params.append(role_var.get())
+                
+                if last_name_var.get():
+                    conditions.append("last_name ILIKE %s")
+                    params.append(f"%{last_name_var.get()}%")
+                
+                if first_name_var.get():
+                    conditions.append("first_name ILIKE %s")
+                    params.append(f"%{first_name_var.get()}%")
+                
+                if patronymic_var.get():
+                    conditions.append("patronymic ILIKE %s")
+                    params.append(f"%{patronymic_var.get()}%")
+                
+                # Сохраняем условия поиска
+                self.current_search_conditions['employee'] = {
+                    'conditions': conditions,
+                    'params': params
+                }
+                
+                # Выполняем поиск и обновляем таблицу
+                self.load_employees()
+                search_window.destroy()
+                
+            except ValueError as ve:
+                messagebox.showerror("Ошибка", f"Некорректные данные: {str(ve)}")
+            except Exception as e:
+                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
+                self.conn.rollback()
+
+        def reset_search():
+            self.current_search_conditions['employee'] = None
+            self.load_employees()
+            search_window.destroy()
+        
+        Button(search_window, text="Найти", command=perform_search).grid(
+            row=6, column=0, padx=5, pady=10, sticky=EW)
+        Button(search_window, text="Сбросить", command=reset_search).grid(
+            row=6, column=1, padx=5, pady=10, sticky=EW)
+    
+    # Методы для работы с накладными
     def add_invoice(self):
         """Добавление новой накладной с проверкой прав"""
         if not self.can_edit_invoices:
@@ -2041,154 +2363,6 @@ class WarehouseApp:
                 messagebox.showerror("Ошибка", f"Не удалось удалить накладную: {str(e)}")
     
     # Методы для работы со складом
-    def search_warehouse_item(self):
-        """Поиск деталей на складе по различным критериям"""
-        # Сохраняем текущие данные перед поиском
-        current_data = []
-        for item in self.warehouse_tree.get_children():
-            current_data.append(self.warehouse_tree.item(item)['values'])
-        
-        search_window = Toplevel(self.root)
-        search_window.title("Поиск деталей на складе")
-        
-        # Создаем элементы формы для поиска
-        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
-        
-        # Тип детали
-        Label(search_window, text="Тип детали:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
-        type_var = StringVar()
-        type_entry = Entry(search_window, textvariable=type_var)
-        type_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Номер склада
-        Label(search_window, text="Номер склада:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
-        warehouse_var = StringVar()
-        warehouse_entry = Entry(search_window, textvariable=warehouse_var)
-        warehouse_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Номер комнаты
-        Label(search_window, text="Номер комнаты:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
-        room_var = StringVar()
-        room_entry = Entry(search_window, textvariable=room_var)
-        room_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Номер стеллажа
-        Label(search_window, text="Номер стеллажа:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
-        rack_var = StringVar()
-        rack_entry = Entry(search_window, textvariable=rack_var)
-        rack_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Номер полки
-        Label(search_window, text="Номер полки:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
-        shelf_var = StringVar()
-        shelf_entry = Entry(search_window, textvariable=shelf_var)
-        shelf_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Вес (от и до)
-        Label(search_window, text="Вес от:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
-        weight_from_var = StringVar()
-        weight_from_entry = Entry(search_window, textvariable=weight_from_var)
-        weight_from_entry.grid(row=6, column=1, padx=5, pady=5, sticky=EW)
-        
-        Label(search_window, text="Вес до:").grid(row=7, column=0, padx=5, pady=5, sticky=W)
-        weight_to_var = StringVar()
-        weight_to_entry = Entry(search_window, textvariable=weight_to_var)
-        weight_to_entry.grid(row=7, column=1, padx=5, pady=5, sticky=EW)
-        
-        def perform_search():
-            try:
-                # Собираем условия для запроса
-                conditions = []
-                params = []
-                
-                if type_var.get():
-                    conditions.append("type_detail ILIKE %s")
-                    params.append(f"%{type_var.get()}%")
-                
-                if warehouse_var.get():
-                    conditions.append("warehouse_number = %s")
-                    params.append(warehouse_var.get())
-                
-                if room_var.get():
-                    conditions.append("room_number = %s")
-                    params.append(room_var.get())
-                
-                if rack_var.get():
-                    conditions.append("rack_number = %s")
-                    params.append(rack_var.get())
-                
-                if shelf_var.get():
-                    conditions.append("shelf_number = %s")
-                    params.append(shelf_var.get())
-                
-                if weight_from_var.get():
-                    try:
-                        weight_from = float(weight_from_var.get())
-                        conditions.append("weight >= %s")
-                        params.append(weight_from)
-                    except ValueError:
-                        messagebox.showwarning("Предупреждение", "Некорректное значение веса 'от'")
-                
-                if weight_to_var.get():
-                    try:
-                        weight_to = float(weight_to_var.get())
-                        conditions.append("weight <= %s")
-                        params.append(weight_to)
-                    except ValueError:
-                        messagebox.showwarning("Предупреждение", "Некорректное значение веса 'до'")
-                
-                # Формируем SQL запрос
-                query = """
-                    SELECT 
-                        detail_id,
-                        warehouse_number,
-                        room_number,
-                        rack_number,
-                        shelf_number,
-                        type_detail,
-                        weight
-                    FROM warehouse_details_view
-                """
-                
-                if conditions:
-                    query += " WHERE " + " AND ".join(conditions)
-                
-                query += " ORDER BY detail_id, warehouse_number, room_number, rack_number, shelf_number"
-                
-                # Выполняем запрос
-                self.warehouse_tree.delete(*self.warehouse_tree.get_children())
-                self.cursor.execute(query, params)
-                
-                found_items = self.cursor.fetchall()
-                
-                if not found_items:
-                    messagebox.showinfo("Информация", "Детали не найдены")
-                    # Восстанавливаем исходные данные
-                    self.warehouse_tree.delete(*self.warehouse_tree.get_children())
-                    for row in current_data:
-                        self.warehouse_tree.insert("", END, values=row)
-                    return
-                
-                for row in found_items:
-                    self.warehouse_tree.insert("", END, values=row)
-                
-                found_count = len(found_items)
-                self.status_bar.config(text=f"Найдено деталей: {found_count}")
-                search_window.destroy()
-                
-            except Exception as e:
-                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
-                self.conn.rollback()
-                # Восстанавливаем исходные данные при ошибке
-                self.warehouse_tree.delete(*self.warehouse_tree.get_children())
-                for row in current_data:
-                    self.warehouse_tree.insert("", END, values=row)
-        
-        Button(search_window, text="Найти", command=perform_search).grid(
-            row=8, column=0, padx=5, pady=10, sticky=EW)
-        Button(search_window, text="Сбросить", command=self.load_warehouse).grid(
-            row=8, column=1, padx=5, pady=10, sticky=EW)
-    
     def add_warehouse_item(self):
         if not self.can_edit_warehouse:
             messagebox.showerror("Ошибка", "У вас нет прав на добавление деталей")
@@ -2706,119 +2880,6 @@ class WarehouseApp:
                 messagebox.showerror("Ошибка", f"Не удалось удалить деталь: {str(e)}")
     
     # Методы для работы с контрагентами
-    def search_counteragent(self):
-        """Поиск контрагентов по различным критериям"""
-        # Сохраняем текущие данные перед поиском
-        current_data = []
-        for item in self.counteragent_tree.get_children():
-            current_data.append(self.counteragent_tree.item(item)['values'])
-        
-        search_window = Toplevel(self.root)
-        search_window.title("Поиск контрагентов")
-        
-        # Создаем элементы формы для поиска
-        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
-        
-        # ID контрагента
-        Label(search_window, text="ID контрагента:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
-        id_var = StringVar()
-        id_entry = Entry(search_window, textvariable=id_var)
-        id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Название контрагента
-        Label(search_window, text="Название:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
-        name_var = StringVar()
-        name_entry = Entry(search_window, textvariable=name_var)
-        name_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Контактное лицо
-        Label(search_window, text="Контактное лицо:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
-        contact_var = StringVar()
-        contact_entry = Entry(search_window, textvariable=contact_var)
-        contact_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Телефон
-        Label(search_window, text="Телефон:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
-        phone_var = StringVar()
-        phone_entry = Entry(search_window, textvariable=phone_var)
-        phone_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Адрес
-        Label(search_window, text="Адрес:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
-        address_var = StringVar()
-        address_entry = Entry(search_window, textvariable=address_var)
-        address_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
-        
-        def perform_search():
-            try:
-                # Собираем условия для запроса
-                conditions = []
-                params = []
-                
-                if id_var.get():
-                    conditions.append("counteragent_id = %s")
-                    params.append(int(id_var.get()))
-                
-                if name_var.get():
-                    conditions.append("counteragent_name ILIKE %s")
-                    params.append(f"%{name_var.get()}%")
-                
-                if contact_var.get():
-                    conditions.append("contact_person ILIKE %s")
-                    params.append(f"%{contact_var.get()}%")
-                
-                if phone_var.get():
-                    conditions.append("phone_number::text LIKE %s")
-                    params.append(f"%{phone_var.get()}%")
-                
-                if address_var.get():
-                    conditions.append("address ILIKE %s")
-                    params.append(f"%{address_var.get()}%")
-                
-                # Формируем SQL запрос
-                query = "SELECT * FROM counteragent"
-                
-                if conditions:
-                    query += " WHERE " + " AND ".join(conditions)
-                
-                query += " ORDER BY counteragent_id"
-                
-                # Выполняем запрос
-                self.counteragent_tree.delete(*self.counteragent_tree.get_children())
-                self.cursor.execute(query, params)
-                
-                found_items = self.cursor.fetchall()
-                
-                if not found_items:
-                    messagebox.showinfo("Информация", "Контрагенты не найдены")
-                    # Восстанавливаем исходные данные
-                    self.counteragent_tree.delete(*self.counteragent_tree.get_children())
-                    for row in current_data:
-                        self.counteragent_tree.insert("", END, values=row)
-                    return
-                
-                for row in found_items:
-                    self.counteragent_tree.insert("", END, values=row)
-                
-                found_count = len(found_items)
-                self.status_bar.config(text=f"Найдено контрагентов: {found_count}")
-                search_window.destroy()
-                
-            except ValueError as ve:
-                messagebox.showerror("Ошибка", f"Некорректные данные: {str(ve)}")
-            except Exception as e:
-                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
-                self.conn.rollback()
-                # Восстанавливаем исходные данные при ошибке
-                self.counteragent_tree.delete(*self.counteragent_tree.get_children())
-                for row in current_data:
-                    self.counteragent_tree.insert("", END, values=row)
-        
-        Button(search_window, text="Найти", command=perform_search).grid(
-            row=6, column=0, padx=5, pady=10, sticky=EW)
-        Button(search_window, text="Сбросить", command=self.load_counteragents).grid(
-            row=6, column=1, padx=5, pady=10, sticky=EW)
-    
     def add_counteragent(self):
         """Добавление нового контрагента"""
         if not self.can_edit_counteragents:
@@ -2969,120 +3030,6 @@ class WarehouseApp:
                 messagebox.showerror("Ошибка", f"Не удалось удалить контрагента: {str(e)}")
     
     # Методы для работы с сотрудниками
-    def search_employee(self):
-        """Поиск сотрудников по различным критериям"""
-        # Сохраняем текущие данные перед поиском
-        current_data = []
-        for item in self.employee_tree.get_children():
-            current_data.append(self.employee_tree.item(item)['values'])
-        
-        search_window = Toplevel(self.root)
-        search_window.title("Поиск сотрудников")
-        
-        # Создаем элементы формы для поиска
-        Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
-        
-        # ID сотрудника
-        Label(search_window, text="ID сотрудника:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
-        id_var = StringVar()
-        id_entry = Entry(search_window, textvariable=id_var)
-        id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Роль
-        Label(search_window, text="Роль:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
-        role_var = StringVar()
-        role_combobox = ttk.Combobox(search_window, textvariable=role_var, 
-                                    values=["", "Кладовщик", "Менеджер склада", "Владелец"])
-        role_combobox.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Фамилия
-        Label(search_window, text="Фамилия:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
-        last_name_var = StringVar()
-        last_name_entry = Entry(search_window, textvariable=last_name_var)
-        last_name_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Имя
-        Label(search_window, text="Имя:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
-        first_name_var = StringVar()
-        first_name_entry = Entry(search_window, textvariable=first_name_var)
-        first_name_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
-        
-        # Отчество
-        Label(search_window, text="Отчество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
-        patronymic_var = StringVar()
-        patronymic_entry = Entry(search_window, textvariable=patronymic_var)
-        patronymic_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
-        
-        def perform_search():
-            try:
-                # Собираем условия для запроса
-                conditions = []
-                params = []
-                
-                if id_var.get():
-                    conditions.append("employee_id = %s")
-                    params.append(int(id_var.get()))
-                
-                if role_var.get():
-                    conditions.append("employee_role = %s")
-                    params.append(role_var.get())
-                
-                if last_name_var.get():
-                    conditions.append("last_name ILIKE %s")
-                    params.append(f"%{last_name_var.get()}%")
-                
-                if first_name_var.get():
-                    conditions.append("first_name ILIKE %s")
-                    params.append(f"%{first_name_var.get()}%")
-                
-                if patronymic_var.get():
-                    conditions.append("patronymic ILIKE %s")
-                    params.append(f"%{patronymic_var.get()}%")
-                
-                # Формируем SQL запрос
-                query = "SELECT * FROM employee"
-                
-                if conditions:
-                    query += " WHERE " + " AND ".join(conditions)
-                
-                query += " ORDER BY employee_id"
-                
-                # Выполняем запрос
-                self.employee_tree.delete(*self.employee_tree.get_children())
-                self.cursor.execute(query, params)
-                
-                found_items = self.cursor.fetchall()
-                
-                if not found_items:
-                    messagebox.showinfo("Информация", "Сотрудники не найдены")
-                    # Восстанавливаем исходные данные
-                    self.employee_tree.delete(*self.employee_tree.get_children())
-                    for row in current_data:
-                        self.employee_tree.insert("", END, values=row)
-                    return
-                
-                for row in found_items:
-                    self.employee_tree.insert("", END, values=row)
-                
-                found_count = len(found_items)
-                self.status_bar.config(text=f"Найдено сотрудников: {found_count}")
-                search_window.destroy()
-                
-            except ValueError as ve:
-                messagebox.showerror("Ошибка", f"Некорректные данные: {str(ve)}")
-            except Exception as e:
-                self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
-                self.conn.rollback()
-                # Восстанавливаем исходные данные при ошибке
-                self.employee_tree.delete(*self.employee_tree.get_children())
-                for row in current_data:
-                    self.employee_tree.insert("", END, values=row)
-        
-        Button(search_window, text="Найти", command=perform_search).grid(
-            row=6, column=0, padx=5, pady=10, sticky=EW)
-        Button(search_window, text="Сбросить", command=self.load_employees).grid(
-            row=6, column=1, padx=5, pady=10, sticky=EW)
-    
     def add_employee(self):
         """Добавление нового сотрудника"""
         if not self.can_edit_employees:
