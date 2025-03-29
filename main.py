@@ -2502,6 +2502,13 @@ class WarehouseApp:
                 
                 self.conn.commit()
                 self.load_invoices()
+                
+                # Проверяем, стала ли таблица пустой после удаления
+                if len(self.invoice_tree.get_children()) == 0 and self.current_search_conditions['invoice']:
+                    messagebox.showinfo("Информация", "Таблица пуста. Сброс условий поиска.")
+                    self.current_search_conditions['invoice'] = None
+                    self.load_invoices()
+                    
                 messagebox.showinfo("Успех", "Накладная успешно удалена")
             except Exception as e:
                 self.conn.rollback()
@@ -3045,6 +3052,13 @@ class WarehouseApp:
                 self.cursor.execute("DELETE FROM details WHERE detail_id = %s", (detail_id,))
                 self.conn.commit()
                 self.load_warehouse()
+                
+                # Проверяем, стала ли таблица пустой после удаления
+                if len(self.warehouse_tree.get_children()) == 0 and self.current_search_conditions['warehouse']:
+                    messagebox.showinfo("Информация", "Таблица пуста. Сброс условий поиска.")
+                    self.current_search_conditions['warehouse'] = None
+                    self.load_warehouse()
+                    
                 messagebox.showinfo("Успех", "Деталь успешно удалена")
             except Exception as e:
                 self.conn.rollback()
@@ -3195,6 +3209,13 @@ class WarehouseApp:
                 self.cursor.execute("DELETE FROM counteragent WHERE counteragent_id = %s", (counteragent_id,))
                 self.conn.commit()
                 self.load_counteragents()
+                
+                # Проверяем, стала ли таблица пустой после удаления
+                if len(self.counteragent_tree.get_children()) == 0 and self.current_search_conditions['counteragent']:
+                    messagebox.showinfo("Информация", "Таблица пуста. Сброс условий поиска.")
+                    self.current_search_conditions['counteragent'] = None
+                    self.load_counteragents()
+                    
                 messagebox.showinfo("Успех", "Контрагент успешно удален")
             except Exception as e:
                 self.conn.rollback()
@@ -3349,6 +3370,13 @@ class WarehouseApp:
                 self.cursor.execute("DELETE FROM employee WHERE employee_id = %s", (employee_id,))
                 self.conn.commit()
                 self.load_employees()
+                
+                # Проверяем, стала ли таблица пустой после удаления
+                if len(self.employee_tree.get_children()) == 0 and self.current_search_conditions['employee']:
+                    messagebox.showinfo("Информация", "Таблица пуста. Сброс условий поиска.")
+                    self.current_search_conditions['employee'] = None
+                    self.load_employees()
+                    
                 messagebox.showinfo("Успех", "Сотрудник успешно удален")
             except Exception as e:
                 self.conn.rollback()
