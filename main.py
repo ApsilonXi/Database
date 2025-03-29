@@ -13,6 +13,7 @@ class WarehouseApp:
         self.current_user = login
         self.user_password = password
         self.initial_state = None
+        self.is_search_active = False  
         
         # Добавляем атрибуты для хранения условий поиска
         self.current_search_conditions = {
@@ -125,6 +126,36 @@ class WarehouseApp:
             'warehouse',
             'log_table'
         ]
+    
+    def refresh_affected_tab(self, table_name):
+        """Обновляет вкладку, соответствующую измененной таблице"""
+        if not self.is_search_active:
+            if table_name in ['invoice', 'invoice_detail', 'invoice_employee'] and hasattr(self, 'invoice_tree'):
+                self.load_invoices()
+            elif table_name == 'details' and hasattr(self, 'warehouse_tree'):
+                self.load_warehouse()
+            elif table_name == 'counteragent' and hasattr(self, 'counteragent_tree'):
+                self.load_counteragents()
+            elif table_name == 'employee' and hasattr(self, 'employee_tree'):
+                self.load_employees()
+        else:
+            # Если поиск активен, не обновляем автоматически
+            pass
+
+    def refresh_all_tabs(self):
+        """Обновляет все вкладки приложения"""
+        if not self.is_search_active:
+            if hasattr(self, 'invoice_tree'):
+                self.load_invoices()
+            if hasattr(self, 'warehouse_tree'):
+                self.load_warehouse()
+            if hasattr(self, 'counteragent_tree'):
+                self.load_counteragents()
+            if hasattr(self, 'employee_tree'):
+                self.load_employees()
+        else:
+            # Если поиск активен, не обновляем автоматически
+            pass
     
     def create_settings_tab(self):
         """Создает вкладку настроек для пользователя"""
@@ -2478,6 +2509,7 @@ class WarehouseApp:
     
     # Методы для работы со складом
     def add_warehouse_item(self):
+        """Добавление детали на склад с динамическими выпадающими списками"""
         if not self.can_edit_warehouse:
             messagebox.showerror("Ошибка", "У вас нет прав на добавление деталей")
             return
@@ -2489,50 +2521,8 @@ class WarehouseApp:
             # Получаем список складов
             self.cursor.execute("SELECT warehouse_id, warehouse_number FROM warehouse ORDER BY warehouse_number")
             warehouses = self.cursor.fetchall()
-            warehouse_options = [f"{number}" for id, number in warehouses]
-            warehouse_ids = {number: id for id, number in warehouses}
-
-            # Получаем список комнат для первого склада (если есть)
-            room_options = []
-            room_ids = {}
-            if warehouses:
-                self.cursor.execute("""
-                    SELECT room_id, room_number 
-                    FROM room 
-                    WHERE warehouseid = %s 
-                    ORDER BY room_number
-                """, (warehouses[0][0],))
-                rooms = self.cursor.fetchall()
-                room_options = [f"{number}" for id, number in rooms]
-                room_ids = {number: id for id, number in rooms}
-
-            # Получаем список стеллажей для первой комнаты (если есть)
-            rack_options = []
-            rack_ids = {}
-            if rooms:
-                self.cursor.execute("""
-                    SELECT rack_id, rack_number 
-                    FROM rack 
-                    WHERE roomid = %s 
-                    ORDER BY rack_number
-                """, (rooms[0][0],))
-                racks = self.cursor.fetchall()
-                rack_options = [f"{number}" for id, number in racks]
-                rack_ids = {number: id for id, number in racks}
-
-            # Получаем список полок для первого стеллажа (если есть)
-            shelf_options = []
-            shelf_ids = {}
-            if racks:
-                self.cursor.execute("""
-                    SELECT shelf_id, shelf_number 
-                    FROM shelf 
-                    WHERE rackid = %s 
-                    ORDER BY shelf_number
-                """, (racks[0][0],))
-                shelves = self.cursor.fetchall()
-                shelf_options = [f"{number}" for id, number in shelves]
-                shelf_ids = {number: id for id, number in shelves}
+            warehouse_options = [str(number) for id, number in warehouses]
+            warehouse_ids = {str(number): id for id, number in warehouses}
 
             # Создаем элементы формы
             row = 0
@@ -2543,38 +2533,30 @@ class WarehouseApp:
             warehouse_combobox = ttk.Combobox(add_window, textvariable=warehouse_var, 
                                             values=warehouse_options, state="readonly")
             warehouse_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
-            if warehouse_options:
-                warehouse_combobox.current(0)
             row += 1
 
             # Комната (выпадающий список)
             Label(add_window, text="Номер комнаты:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             room_var = StringVar()
             room_combobox = ttk.Combobox(add_window, textvariable=room_var, 
-                                        values=room_options, state="readonly")
+                                        values=[], state="readonly")
             room_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
-            if room_options:
-                room_combobox.current(0)
             row += 1
 
             # Стеллаж (выпадающий список)
             Label(add_window, text="Номер стеллажа:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             rack_var = StringVar()
             rack_combobox = ttk.Combobox(add_window, textvariable=rack_var, 
-                                        values=rack_options, state="readonly")
+                                        values=[], state="readonly")
             rack_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
-            if rack_options:
-                rack_combobox.current(0)
             row += 1
 
             # Полка (выпадающий список)
             Label(add_window, text="Номер полки:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             shelf_var = StringVar()
             shelf_combobox = ttk.Combobox(add_window, textvariable=shelf_var, 
-                                        values=shelf_options, state="readonly")
+                                        values=[], state="readonly")
             shelf_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
-            if shelf_options:
-                shelf_combobox.current(0)
             row += 1
 
             # Тип детали (поле ввода)
@@ -2591,68 +2573,116 @@ class WarehouseApp:
             row += 1
 
             # Функция для обновления списка комнат при изменении склада
-            def update_rooms(event):
+            def update_rooms(event=None):
                 selected_warehouse = warehouse_var.get()
                 if selected_warehouse in warehouse_ids:
-                    self.cursor.execute("""
-                        SELECT room_id, room_number 
-                        FROM room 
-                        WHERE warehouseid = %s 
-                        ORDER BY room_number
-                    """, (warehouse_ids[selected_warehouse],))
-                    rooms = self.cursor.fetchall()
-                    new_options = [f"{number}" for id, number in rooms]
-                    room_combobox['values'] = new_options
-                    if new_options:
-                        room_combobox.current(0)
-                        room_var.set(new_options[0])
-                    else:
-                        room_var.set('')
-                    update_racks(None)  # Обновляем стеллажи
+                    warehouse_id = warehouse_ids[selected_warehouse]
+                    try:
+                        self.cursor.execute("""
+                            SELECT room_id, room_number 
+                            FROM room 
+                            WHERE warehouseID = %s 
+                            ORDER BY room_number
+                        """, (warehouse_id,))
+                        rooms = self.cursor.fetchall()
+                        room_combobox['values'] = [str(number) for id, number in rooms]
+                        
+                        if rooms:
+                            room_combobox.current(0)
+                            room_var.set(str(rooms[0][1]))
+                            update_racks()
+                        else:
+                            room_var.set('')
+                            rack_var.set('')
+                            shelf_var.set('')
+                            rack_combobox['values'] = []
+                            shelf_combobox['values'] = []
+                    except Exception as e:
+                        print(f"Error updating rooms: {e}")
+                        room_combobox['values'] = []
+                else:
+                    room_combobox['values'] = []
+                    rack_combobox['values'] = []
+                    shelf_combobox['values'] = []
 
             # Функция для обновления списка стеллажей при изменении комнаты
-            def update_racks(event):
+            def update_racks(event=None):
+                selected_warehouse = warehouse_var.get()
                 selected_room = room_var.get()
-                if selected_room in room_ids:
-                    self.cursor.execute("""
-                        SELECT rack_id, rack_number 
-                        FROM rack 
-                        WHERE roomid = %s 
-                        ORDER BY rack_number
-                    """, (room_ids[selected_room],))
-                    racks = self.cursor.fetchall()
-                    new_options = [f"{number}" for id, number in racks]
-                    rack_combobox['values'] = new_options
-                    if new_options:
-                        rack_combobox.current(0)
-                        rack_var.set(new_options[0])
-                    else:
-                        rack_var.set('')
-                    update_shelves(None)  # Обновляем полки
+                if selected_warehouse in warehouse_ids and selected_room:
+                    warehouse_id = warehouse_ids[selected_warehouse]
+                    try:
+                        self.cursor.execute("""
+                            SELECT rack_id, rack_number 
+                            FROM rack 
+                            WHERE roomID = (
+                                SELECT room_id FROM room 
+                                WHERE room_number = %s AND warehouseID = %s
+                            )
+                            ORDER BY rack_number
+                        """, (int(selected_room), warehouse_id))
+                        racks = self.cursor.fetchall()
+                        rack_combobox['values'] = [str(number) for id, number in racks]
+                        
+                        if racks:
+                            rack_combobox.current(0)
+                            rack_var.set(str(racks[0][1]))
+                            update_shelves()
+                        else:
+                            rack_var.set('')
+                            shelf_var.set('')
+                            shelf_combobox['values'] = []
+                    except Exception as e:
+                        print(f"Error updating racks: {e}")
+                        rack_combobox['values'] = []
+                else:
+                    rack_combobox['values'] = []
+                    shelf_combobox['values'] = []
 
             # Функция для обновления списка полок при изменении стеллажа
-            def update_shelves(event):
+            def update_shelves(event=None):
+                selected_warehouse = warehouse_var.get()
+                selected_room = room_var.get()
                 selected_rack = rack_var.get()
-                if selected_rack in rack_ids:
-                    self.cursor.execute("""
-                        SELECT shelf_id, shelf_number 
-                        FROM shelf 
-                        WHERE rackid = %s 
-                        ORDER BY shelf_number
-                    """, (rack_ids[selected_rack],))
-                    shelves = self.cursor.fetchall()
-                    new_options = [f"{number}" for id, number in shelves]
-                    shelf_combobox['values'] = new_options
-                    if new_options:
-                        shelf_combobox.current(0)
-                        shelf_var.set(new_options[0])
-                    else:
-                        shelf_var.set('')
+                if (selected_warehouse in warehouse_ids and selected_room and selected_rack):
+                    warehouse_id = warehouse_ids[selected_warehouse]
+                    try:
+                        self.cursor.execute("""
+                            SELECT shelf_id, shelf_number 
+                            FROM shelf 
+                            WHERE rackID = (
+                                SELECT rack_id FROM rack 
+                                WHERE rack_number = %s AND roomID = (
+                                    SELECT room_id FROM room 
+                                    WHERE room_number = %s AND warehouseID = %s
+                                )
+                            )
+                            ORDER BY shelf_number
+                        """, (int(selected_rack), int(selected_room), warehouse_id))
+                        shelves = self.cursor.fetchall()
+                        shelf_combobox['values'] = [str(number) for id, number in shelves]
+                        
+                        if shelves:
+                            shelf_combobox.current(0)
+                            shelf_var.set(str(shelves[0][1]))
+                        else:
+                            shelf_var.set('')
+                    except Exception as e:
+                        print(f"Error updating shelves: {e}")
+                        shelf_combobox['values'] = []
+                else:
+                    shelf_combobox['values'] = []
 
             # Привязываем обработчики изменений
             warehouse_combobox.bind("<<ComboboxSelected>>", update_rooms)
             room_combobox.bind("<<ComboboxSelected>>", update_racks)
             rack_combobox.bind("<<ComboboxSelected>>", update_shelves)
+
+            # Устанавливаем первый склад по умолчанию, если есть
+            if warehouse_options:
+                warehouse_combobox.current(0)
+                warehouse_var.set(warehouse_options[0])
+                update_rooms()
 
             def save_item():
                 try:
@@ -2662,20 +2692,20 @@ class WarehouseApp:
                             type_entry.get(), weight_entry.get()]):
                         raise ValueError("Все поля должны быть заполнены")
 
-                    # Получаем ID полки (проверяем её существование)
+                    # Получаем ID полки
                     self.cursor.execute("""
                         SELECT shelf_id FROM shelf 
-                        WHERE shelf_number = %s AND rackid = (
+                        WHERE shelf_number = %s AND rackID = (
                             SELECT rack_id FROM rack 
-                            WHERE rack_number = %s AND roomid = (
+                            WHERE rack_number = %s AND roomID = (
                                 SELECT room_id FROM room 
-                                WHERE room_number = %s AND warehouseid = (
+                                WHERE room_number = %s AND warehouseID = (
                                     SELECT warehouse_id FROM warehouse 
                                     WHERE warehouse_number = %s
                                 )
                             )
                         )
-                    """, (shelf_var.get(), rack_var.get(), room_var.get(), warehouse_var.get()))
+                    """, (int(shelf_var.get()), int(rack_var.get()), int(room_var.get()), int(warehouse_var.get())))
                     
                     shelf_data = self.cursor.fetchone()
                     if not shelf_data:
@@ -2690,7 +2720,7 @@ class WarehouseApp:
                     except ValueError as e:
                         raise ValueError("Вес должен быть числом (например, 2.1)")
                     
-                    # Проверка количества деталей на полке (новый код)
+                    # Проверка количества деталей на полке
                     self.cursor.execute("""
                         SELECT COUNT(*) FROM details WHERE shelfid = %s
                     """, (shelf_id,))
@@ -2714,7 +2744,6 @@ class WarehouseApp:
                 except Exception as e:
                     self.conn.rollback()
                     messagebox.showerror("Ошибка", f"Не удалось добавить деталь: {str(e)}")
-                    print(f"[DEBUG] Ошибка: {e}")  # Для отладки
             
             # Кнопка сохранения
             Button(add_window, text="Сохранить", command=save_item).grid(
@@ -2724,7 +2753,7 @@ class WarehouseApp:
             messagebox.showerror("Ошибка", f"Не удалось открыть форму: {str(e)}")
 
     def edit_warehouse_item(self):
-        """Редактирование детали на складе с выпадающими списками"""
+        """Редактирование детали на складе с динамическими выпадающими списками"""
         if not self.can_edit_warehouse:
             messagebox.showerror("Ошибка", "У вас нет прав на редактирование деталей")
             return
@@ -2766,42 +2795,9 @@ class WarehouseApp:
             # Получаем списки для выпадающих списков
             self.cursor.execute("SELECT warehouse_id, warehouse_number FROM warehouse ORDER BY warehouse_number")
             warehouses = self.cursor.fetchall()
-            warehouse_options = [f"{number}" for id, number in warehouses]
-            warehouse_ids = {number: id for id, number in warehouses}
-            
-            self.cursor.execute("""
-                SELECT room_id, room_number 
-                FROM room 
-                WHERE warehouseid = %s 
-                ORDER BY room_number
-            """, (detail_data[9],))  # warehouse_id из текущей детали
-            rooms = self.cursor.fetchall()
-            room_options = [f"{number}" for id, number in rooms]
-            room_ids = {number: id for id, number in rooms}
-            
-            self.cursor.execute("""
-                SELECT rack_id, rack_number 
-                FROM rack 
-                WHERE roomid = %s 
-                ORDER BY rack_number
-            """, (detail_data[7],))  # room_id из текущей детали
-            racks = self.cursor.fetchall()
-            rack_options = [f"{number}" for id, number in racks]
-            rack_ids = {number: id for id, number in racks}
-            
-            self.cursor.execute("""
-                SELECT shelf_id, shelf_number 
-                FROM shelf 
-                WHERE rackid = %s 
-                ORDER BY shelf_number
-            """, (detail_data[5],))  # rack_id из текущей детали
-            shelves = self.cursor.fetchall()
-            shelf_options = [f"{number}" for id, number in shelves]
-            shelf_ids = {number: id for id, number in shelves}
-            
-            self.cursor.execute("SELECT DISTINCT type_detail FROM details ORDER BY type_detail")
-            detail_types = [row[0] for row in self.cursor.fetchall()]
-            
+            warehouse_options = [str(number) for id, number in warehouses]
+            warehouse_ids = {str(number): id for id, number in warehouses}
+
             # Создаем элементы формы с выпадающими списками
             row = 0
             
@@ -2817,7 +2813,7 @@ class WarehouseApp:
             Label(edit_window, text="Номер комнаты:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             room_var = StringVar(value=str(detail_data[8]))  # room_number
             room_combobox = ttk.Combobox(edit_window, textvariable=room_var, 
-                                        values=room_options, state="readonly")
+                                        values=[], state="readonly")
             room_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
@@ -2825,7 +2821,7 @@ class WarehouseApp:
             Label(edit_window, text="Номер стеллажа:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             rack_var = StringVar(value=str(detail_data[6]))  # rack_number
             rack_combobox = ttk.Combobox(edit_window, textvariable=rack_var, 
-                                        values=rack_options, state="readonly")
+                                        values=[], state="readonly")
             rack_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
@@ -2833,138 +2829,180 @@ class WarehouseApp:
             Label(edit_window, text="Номер полки:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             shelf_var = StringVar(value=str(detail_data[4]))  # shelf_number
             shelf_combobox = ttk.Combobox(edit_window, textvariable=shelf_var, 
-                                        values=shelf_options, state="readonly")
+                                        values=[], state="readonly")
             shelf_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
             # Тип детали
             Label(edit_window, text="Тип детали:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             type_var = StringVar(value=detail_data[1])  # type_detail
-            type_combobox = ttk.Combobox(edit_window, textvariable=type_var, 
-                                        values=detail_types)
-            type_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
+            type_entry = Entry(edit_window, textvariable=type_var)
+            type_entry.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
             # Вес
             Label(edit_window, text="Вес (кг):").grid(row=row, column=0, padx=5, pady=5, sticky=W)
-            weight_entry = Entry(edit_window)
-            weight_entry.insert(0, str(detail_data[2]))  # weight
+            weight_var = StringVar(value=str(detail_data[2]))  # weight
+            weight_entry = Entry(edit_window, textvariable=weight_var)
             weight_entry.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
-            
+
             # Функции для обновления зависимых списков
-            def update_rooms(event):
+            def update_rooms(event=None):
                 selected_warehouse = warehouse_var.get()
                 if selected_warehouse in warehouse_ids:
-                    self.cursor.execute("""
-                        SELECT room_id, room_number 
-                        FROM room 
-                        WHERE warehouseid = %s 
-                        ORDER BY room_number
-                    """, (warehouse_ids[selected_warehouse],))
-                    rooms = self.cursor.fetchall()
-                    new_options = [f"{number}" for id, number in rooms]
-                    room_combobox['values'] = new_options
-                    if new_options:
-                        room_combobox.current(0)
-                        room_var.set(new_options[0])
-                    else:
-                        room_var.set('')
-                    update_racks(None)
+                    warehouse_id = warehouse_ids[selected_warehouse]
+                    try:
+                        self.cursor.execute("""
+                            SELECT room_id, room_number 
+                            FROM room 
+                            WHERE warehouseID = %s 
+                            ORDER BY room_number
+                        """, (warehouse_id,))
+                        rooms = self.cursor.fetchall()
+                        room_combobox['values'] = [str(number) for id, number in rooms]
+                        
+                        # Устанавливаем текущее значение комнаты, если оно есть в списке
+                        current_room = str(detail_data[8])
+                        if current_room in [str(number) for id, number in rooms]:
+                            room_var.set(current_room)
+                        elif rooms:
+                            room_combobox.current(0)
+                            room_var.set(str(rooms[0][1]))
+                        update_racks()
+                    except Exception as e:
+                        print(f"Error updating rooms: {e}")
+                        room_combobox['values'] = []
+                else:
+                    room_combobox['values'] = []
             
-            def update_racks(event):
+            def update_racks(event=None):
+                selected_warehouse = warehouse_var.get()
                 selected_room = room_var.get()
-                if selected_room in room_ids:
-                    self.cursor.execute("""
-                        SELECT rack_id, rack_number 
-                        FROM rack 
-                        WHERE roomid = %s 
-                        ORDER BY rack_number
-                    """, (room_ids[selected_room],))
-                    racks = self.cursor.fetchall()
-                    new_options = [f"{number}" for id, number in racks]
-                    rack_combobox['values'] = new_options
-                    if new_options:
-                        rack_combobox.current(0)
-                        rack_var.set(new_options[0])
-                    else:
-                        rack_var.set('')
-                    update_shelves(None)
+                if selected_warehouse in warehouse_ids and selected_room:
+                    warehouse_id = warehouse_ids[selected_warehouse]
+                    try:
+                        self.cursor.execute("""
+                            SELECT rack_id, rack_number 
+                            FROM rack 
+                            WHERE roomID = (
+                                SELECT room_id FROM room 
+                                WHERE room_number = %s AND warehouseID = %s
+                            )
+                            ORDER BY rack_number
+                        """, (int(selected_room), warehouse_id))
+                        racks = self.cursor.fetchall()
+                        rack_combobox['values'] = [str(number) for id, number in racks]
+                        
+                        # Устанавливаем текущее значение стеллажа, если оно есть в списке
+                        current_rack = str(detail_data[6])
+                        if current_rack in [str(number) for id, number in racks]:
+                            rack_var.set(current_rack)
+                        elif racks:
+                            rack_combobox.current(0)
+                            rack_var.set(str(racks[0][1]))
+                        update_shelves()
+                    except Exception as e:
+                        print(f"Error updating racks: {e}")
+                        rack_combobox['values'] = []
+                else:
+                    rack_combobox['values'] = []
             
-            def update_shelves(event):
+            def update_shelves(event=None):
+                selected_warehouse = warehouse_var.get()
+                selected_room = room_var.get()
                 selected_rack = rack_var.get()
-                if selected_rack in rack_ids:
-                    self.cursor.execute("""
-                        SELECT shelf_id, shelf_number 
-                        FROM shelf 
-                        WHERE rackid = %s 
-                        ORDER BY shelf_number
-                    """, (rack_ids[selected_rack],))
-                    shelves = self.cursor.fetchall()
-                    new_options = [f"{number}" for id, number in shelves]
-                    shelf_combobox['values'] = new_options
-                    if new_options:
-                        shelf_combobox.current(0)
-                        shelf_var.set(new_options[0])
-                    else:
-                        shelf_var.set('')
-            
+                if (selected_warehouse in warehouse_ids and selected_room and selected_rack):
+                    warehouse_id = warehouse_ids[selected_warehouse]
+                    try:
+                        self.cursor.execute("""
+                            SELECT shelf_id, shelf_number 
+                            FROM shelf 
+                            WHERE rackID = (
+                                SELECT rack_id FROM rack 
+                                WHERE rack_number = %s AND roomID = (
+                                    SELECT room_id FROM room 
+                                    WHERE room_number = %s AND warehouseID = %s
+                                )
+                            )
+                            ORDER BY shelf_number
+                        """, (int(selected_rack), int(selected_room), warehouse_id))
+                        shelves = self.cursor.fetchall()
+                        shelf_combobox['values'] = [str(number) for id, number in shelves]
+                        
+                        # Устанавливаем текущее значение полки, если оно есть в списке
+                        current_shelf = str(detail_data[4])
+                        if current_shelf in [str(number) for id, number in shelves]:
+                            shelf_var.set(current_shelf)
+                        elif shelves:
+                            shelf_combobox.current(0)
+                            shelf_var.set(str(shelves[0][1]))
+                    except Exception as e:
+                        print(f"Error updating shelves: {e}")
+                        shelf_combobox['values'] = []
+                else:
+                    shelf_combobox['values'] = []
+
             # Привязываем обработчики изменений
             warehouse_combobox.bind("<<ComboboxSelected>>", update_rooms)
             room_combobox.bind("<<ComboboxSelected>>", update_racks)
             rack_combobox.bind("<<ComboboxSelected>>", update_shelves)
+
+            # Инициализируем данные сразу после создания формы
+            update_rooms()
             
             def save_changes():
                 try:
                     # Проверяем, что все поля заполнены
                     if not all([warehouse_var.get(), room_var.get(), 
                             rack_var.get(), shelf_var.get(), 
-                            type_var.get(), weight_entry.get()]):
+                            type_var.get(), weight_var.get()]):
                         raise ValueError("Все поля должны быть заполнены")
                     
-                    # Получаем ID полки из выбранного значения
-                    shelf_number = shelf_var.get()
-                    
-                    # Находим ID полки по выбранному номеру
+                    # Получаем ID новой полки
                     self.cursor.execute("""
                         SELECT shelf_id FROM shelf 
-                        WHERE shelf_number = %s AND rackid = (
+                        WHERE shelf_number = %s AND rackID = (
                             SELECT rack_id FROM rack 
-                            WHERE rack_number = %s AND roomid = (
+                            WHERE rack_number = %s AND roomID = (
                                 SELECT room_id FROM room 
-                                WHERE room_number = %s AND warehouseid = (
+                                WHERE room_number = %s AND warehouseID = (
                                     SELECT warehouse_id FROM warehouse 
                                     WHERE warehouse_number = %s
                                 )
                             )
                         )
-                    """, (shelf_number, rack_var.get(), room_var.get(), warehouse_var.get()))
+                    """, (int(shelf_var.get()), int(rack_var.get()), int(room_var.get()), int(warehouse_var.get())))
                     
                     shelf_data = self.cursor.fetchone()
                     if not shelf_data:
                         raise ValueError("Полка не найдена в базе данных")
-                    shelf_id = shelf_data[0]
+                    new_shelf_id = shelf_data[0]
                     
-                    # Проверка количества деталей на полке (НОВЫЙ КОД)
-                    if shelf_id != detail_data[3]:  # Если полка изменилась
+                    # Проверяем вес
+                    try:
+                        weight = float(weight_var.get())
+                        if weight <= 0.0:
+                            raise ValueError("Вес не может быть отрицательным")
+                    except ValueError as e:
+                        raise ValueError("Вес должен быть числом (например, 2.1)")
+                    
+                    # Проверка количества деталей на новой полке (если полка изменилась)
+                    if new_shelf_id != detail_data[3]:  # Если полка изменилась
                         self.cursor.execute("""
                             SELECT COUNT(*) FROM details WHERE shelfid = %s
-                        """, (shelf_id,))
+                        """, (new_shelf_id,))
                         details_count = self.cursor.fetchone()[0]
                         
                         if details_count >= 5:
-                            raise ValueError(f"На полке уже {details_count} деталей. Максимум - 5.")
-                    
-                    # Получаем тип детали и вес
-                    type_detail = type_var.get()
-                    weight = float(weight_entry.get())
-                    
+                            raise ValueError(f"На новой полке уже {details_count} деталей. Максимум - 5.")
+
                     # Обновляем деталь
                     self.cursor.execute("""
                         UPDATE details 
                         SET shelfid = %s, type_detail = %s, weight = %s
                         WHERE detail_id = %s
-                    """, (shelf_id, type_detail, weight, detail_id))
+                    """, (new_shelf_id, type_var.get(), weight, detail_id))
                     
                     self.conn.commit()
                     self.load_warehouse()
@@ -3334,12 +3372,11 @@ def start_work():
     login, password = entry_name.get(), entry_password.get()
     print(f"[AUTH] Attempting login for user: {login}")
     active_user = create_connection(login, password)
-    
     if active_user is not None:
         print("[AUTH] Login successful")
         window.destroy()
         main_win = Tk()
-        app = WarehouseApp(main_win, login, password, active_user)  # Передаем пароль
+        app = WarehouseApp(main_win, login, password, active_user)  
         main_win.mainloop()
     else:
         print("[AUTH] Login failed")
@@ -3352,27 +3389,19 @@ window.geometry('%dx%d+%d+%d' % (500, 400,
                                 (window.winfo_screenheight()/2) - (400/2)))
 window.title("Склад запчастей")
 window.configure(background="#FFFAFA")
-
 middle_window_x = 500 / 2
 middle_window_y = 400 / 3
-
 title_start = ttk.Label(master=window, text="Войдите в систему", 
                        font=("algerian", 20), background="#FFFAFA")
 title_start.place(x=middle_window_x, y=100, anchor="center")
-
 title_login = ttk.Label(text="Логин:", font=("algerian", 10), background="#FFFAFA")
 title_login.place(x=middle_window_x, y=140, anchor="center")
-
 title_password = ttk.Label(text="Пароль:", font=("algerian", 10), background="#FFFAFA")
 title_password.place(x=middle_window_x, y=200, anchor="center")
-
 entry_name = ttk.Entry(width=50)
 entry_name.place(x=middle_window_x, y=middle_window_y+30, anchor="center")
-
 entry_password = ttk.Entry(width=50, show="*")
 entry_password.place(x=middle_window_x, y=middle_window_y+90, anchor="center")
-
 btn_in = ttk.Button(text="Войти", command=start_work)
 btn_in.place(x=middle_window_x, y=middle_window_y+160, anchor="center")
-
 window.mainloop()
