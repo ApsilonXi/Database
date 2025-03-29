@@ -11,8 +11,17 @@ class WarehouseApp:
         self.root.title("Управление складом")
         self.root.geometry("1200x800")
         self.current_user = login
-        self.user_password = password  # Сохраняем пароль пользователя
+        self.user_password = password
         self.initial_state = None
+        
+        # Добавляем атрибуты для хранения условий поиска
+        self.current_search_conditions = {
+            'invoice': None,
+            'warehouse': None,
+            'counteragent': None,
+            'employee': None
+        }
+        self.is_search_active = False
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         
@@ -37,7 +46,6 @@ class WarehouseApp:
             self.cursor = self.conn.cursor()
             self.determine_user_permissions()
             
-            # Сохраняем начальное состояние базы данных
             self.save_initial_state()
             
             self.status_bar = Label(root, text=f"Вход выполнен как: {login} | Готово", bd=1, relief=SUNKEN, anchor=W)
@@ -46,7 +54,6 @@ class WarehouseApp:
             self.notebook = ttk.Notebook(root)
             self.notebook.pack(fill=BOTH, expand=True)
             
-            # Создаем вкладки в нужном порядке
             if self.can_access_warehouse:
                 self.create_warehouse_tab()
                 
@@ -59,7 +66,6 @@ class WarehouseApp:
             if self.can_access_employees:
                 self.create_employee_tab()
             
-            # Всегда добавляем вкладку настроек последней
             self.create_settings_tab()
                 
         except psycopg2.Error as e:
@@ -76,30 +82,52 @@ class WarehouseApp:
         self.root.destroy()
 
     def create_context_menu(self, event, tree, menu_items):
-        """Создание контекстного меню для Treeview"""
-        # Получаем элемент, по которому кликнули
+        """Создание контекстного меню для Treeview с добавлением кнопки обновления"""
         item = tree.identify_row(event.y)
         if not item:
             return
             
-        # Выделяем элемент
         tree.selection_set(item)
         
-        # Создаем меню
         menu = Menu(self.root, tearoff=0)
         
-        # Добавляем пункты меню
         for label, command in menu_items:
-            if command:  # Если команда не (None, None)
+            if command:
                 menu.add_command(label=label, command=command)
             else:
                 menu.add_separator()
         
-        # Показываем меню в позиции клика
+        # Добавляем пункт для принудительного обновления
+        menu.add_separator()
+        if tree == self.invoice_tree:
+            menu.add_command(label="Обновить таблицу", command=self.load_invoices)
+        elif tree == self.warehouse_tree:
+            menu.add_command(label="Обновить таблицу", command=self.load_warehouse)
+        elif tree == self.counteragent_tree:
+            menu.add_command(label="Обновить таблицу", command=self.load_counteragents)
+        elif tree == self.employee_tree:
+            menu.add_command(label="Обновить таблицу", command=self.load_employees)
+        
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def get_table_order(self):
+        """Возвращает порядок таблиц для отката с учетом зависимостей"""
+        return [
+            'invoice_detail',
+            'invoice_employee',
+            'invoice',
+            'details',
+            'counteragent',
+            'employee',
+            'shelf',
+            'rack',
+            'room',
+            'warehouse',
+            'log_table'
+        ]
     
     def create_settings_tab(self):
         """Создает вкладку настроек для пользователя"""
@@ -121,7 +149,7 @@ class WarehouseApp:
         btn_undo.pack(pady=10, fill=X)
         
         # Дополнительные функции для владельца
-        if self.current_user == 'warehouse_owner':
+        if self.current_user == 'owner':
             btn_backup = Button(frame, text="Резервное копирование", 
                             command=self.create_backup)
             btn_backup.pack(pady=10, fill=X)
@@ -135,33 +163,99 @@ class WarehouseApp:
             btn_edit_warehouse.pack(pady=10, fill=X)
 
     def undo_last_operation(self):
-        """Отменяет последнюю операцию с защитой от повторной отмены"""
+        """Отменяет последнюю операцию с учетом зависимостей"""
         try:
-            # Получаем последнюю НЕОТМЕНЕННУЮ операцию
+            if not hasattr(self, 'initial_state_time') or not self.initial_state_time:
+                messagebox.showinfo("Информация", "Не удалось определить начало сессии")
+                return
+
+            # Получаем ID последней операции UNDO (если есть)
             self.cursor.execute("""
-                SELECT log_id, table_name, action_type, record_id, old_values, new_values
-                FROM log_table
-                WHERE action_type NOT IN ('UNDO', 'ROLLBACK')
-                AND log_id NOT IN (SELECT record_id FROM log_table WHERE action_type = 'UNDO')
+                SELECT record_id FROM log_table
+                WHERE action_type = 'UNDO'
+                AND action_time >= %s
                 ORDER BY log_id DESC
                 LIMIT 1
-            """)
-            
+            """, (self.initial_state_time,))
+            last_undo = self.cursor.fetchone()
+            last_undo_id = last_undo[0] if last_undo else None
+
+            # Получаем последнюю операцию текущей сессии
+            query = """
+                SELECT lt.log_id, lt.table_name, lt.action_type, 
+                    lt.record_id, lt.old_values, lt.new_values
+                FROM log_table lt
+                WHERE lt.action_type NOT IN ('UNDO', 'ROLLBACK')
+                AND lt.action_time >= %s
+            """
+            params = [self.initial_state_time]
+
+            if last_undo_id:
+                query += " AND lt.log_id > %s"
+                params.append(last_undo_id)
+
+            query += """
+                ORDER BY 
+                    CASE table_name
+                        WHEN 'invoice_detail' THEN 1
+                        WHEN 'invoice_employee' THEN 2
+                        WHEN 'invoice' THEN 3
+                        WHEN 'details' THEN 4
+                        WHEN 'counteragent' THEN 5
+                        WHEN 'employee' THEN 6
+                        WHEN 'shelf' THEN 7
+                        WHEN 'rack' THEN 8
+                        WHEN 'room' THEN 9
+                        WHEN 'warehouse' THEN 10
+                        ELSE 11
+                    END,
+                    CASE action_type
+                        WHEN 'DELETE' THEN 1
+                        WHEN 'UPDATE' THEN 2
+                        WHEN 'INSERT' THEN 3
+                        ELSE 4
+                    END,
+                    log_id DESC
+                LIMIT 1
+            """
+
+            self.cursor.execute(query, params)
             last_op = self.cursor.fetchone()
             
             if not last_op:
-                messagebox.showinfo("Информация", "Нет операций для отмены")
+                messagebox.showinfo("Информация", "Нет операций для отмены в текущей сессии")
                 return
                 
             log_id, table, action, record_id, old_values, new_values = last_op
+            
+            # Получаем первичный ключ для таблицы
+            pk = self.get_primary_key(table)
+            if not pk:
+                messagebox.showerror("Ошибка", f"Не удалось определить первичный ключ для таблицы {table}")
+                return
             
             # Начинаем транзакцию
             self.cursor.execute("BEGIN")
             
             try:
                 if action == 'INSERT':
-                    # Для INSERT делаем DELETE
-                    pk = self.get_primary_key(table)
+                    # Для связанных таблиц сначала проверяем зависимости
+                    if table in ['invoice_detail', 'invoice_employee']:
+                        self.cursor.execute(f"""
+                            SELECT invoiceid FROM {table} 
+                            WHERE {pk} = %s
+                        """, (record_id,))
+                        invoice_id = self.cursor.fetchone()[0]
+                        self.cursor.execute("""
+                            SELECT 1 FROM invoice 
+                            WHERE invoice_id = %s
+                        """, (invoice_id,))
+                        if not self.cursor.fetchone():
+                            messagebox.showwarning("Предупреждение", 
+                                "Невозможно отменить операцию: связанная накладная уже удалена")
+                            self.conn.rollback()
+                            return
+                    
                     self.cursor.execute(f"""
                         DELETE FROM {table} 
                         WHERE {pk} = %s
@@ -169,7 +263,18 @@ class WarehouseApp:
                     """, (record_id,))
                     
                 elif action == 'DELETE' and old_values:
-                    # Для DELETE делаем INSERT с старыми значениями
+                    # Проверяем зависимости для вставки
+                    if table in ['invoice_detail', 'invoice_employee'] and 'invoiceid' in old_values:
+                        self.cursor.execute("""
+                            SELECT 1 FROM invoice 
+                            WHERE invoice_id = %s
+                        """, (old_values['invoiceid'],))
+                        if not self.cursor.fetchone():
+                            messagebox.showwarning("Предупреждение", 
+                                "Невозможно отменить операцию: связанная накладная не существует")
+                            self.conn.rollback()
+                            return
+                    
                     columns = ', '.join(old_values.keys())
                     values = ', '.join(['%s'] * len(old_values))
                     self.cursor.execute(f"""
@@ -179,17 +284,15 @@ class WarehouseApp:
                     """, list(old_values.values()))
                     
                 elif action == 'UPDATE' and old_values:
-                    # Для UPDATE восстанавливаем старые значения
                     set_clause = ', '.join([f"{k} = %s" for k in old_values.keys()])
                     self.cursor.execute(f"""
                         UPDATE {table} 
                         SET {set_clause}
-                        WHERE {self.get_primary_key(table)} = %s
+                        WHERE {pk} = %s
                         RETURNING *
                     """, list(old_values.values()) + [record_id])
                 
                 # Фиксируем отмену в логах
-                # Преобразуем словари в JSON перед сохранением
                 import json
                 old_values_json = json.dumps(new_values) if new_values else None
                 new_values_json = json.dumps(old_values) if old_values else None
@@ -201,10 +304,7 @@ class WarehouseApp:
                 """, (table, log_id, old_values_json, new_values_json))
                 
                 self.conn.commit()
-                
-                # Обновляем данные в интерфейсе
                 self.refresh_affected_tab(table)
-                
                 messagebox.showinfo("Успех", "Последняя операция успешно отменена")
                 
             except Exception as e:
@@ -213,31 +313,6 @@ class WarehouseApp:
                 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при отмене операции: {str(e)}")
-
-    def refresh_affected_tab(self, table_name):
-        """Обновляет вкладку, соответствующую измененной таблице"""
-        if table_name in ['invoice', 'invoice_detail', 'invoice_employee'] and hasattr(self, 'invoice_tree'):
-            self.load_invoices()
-        elif table_name == 'details' and hasattr(self, 'warehouse_tree'):
-            self.load_warehouse()
-        elif table_name == 'counteragent' and hasattr(self, 'counteragent_tree'):
-            self.load_counteragents()
-        elif table_name == 'employee' and hasattr(self, 'employee_tree'):
-            self.load_employees()
-        else:
-            # Если не знаем к какой вкладке относится таблица, обновляем все
-            self.refresh_all_tabs()
-
-    def refresh_all_tabs(self):
-        """Обновляет все вкладки приложения"""
-        if hasattr(self, 'invoice_tree'):
-            self.load_invoices()
-        if hasattr(self, 'warehouse_tree'):
-            self.load_warehouse()
-        if hasattr(self, 'counteragent_tree'):
-            self.load_counteragents()
-        if hasattr(self, 'employee_tree'):
-            self.load_employees()
 
     def save_initial_state(self):
         """Сохраняет информацию о начальной точке отката"""
@@ -250,7 +325,7 @@ class WarehouseApp:
             self.initial_state_time = None
 
     def rollback_to_initial_state(self):
-        """Откатывает изменения с использованием таблицы логов с защитой от повторного отката"""
+        """Откатывает изменения с учетом зависимостей между таблицами"""
         if not self.initial_state_time:
             messagebox.showwarning("Предупреждение", "Не удалось определить начальное состояние сессии")
             return
@@ -258,13 +333,33 @@ class WarehouseApp:
         if messagebox.askyesno("Подтверждение", 
                             "Вы уверены, что хотите откатить все изменения текущей сессии?"):
             try:
-                # Получаем список изменений из логов
+                # Получаем список изменений из логов, упорядоченный по таблицам
                 self.cursor.execute("""
                     SELECT table_name, action_type, record_id, old_values
                     FROM log_table
                     WHERE action_time >= %s
                     AND log_id > COALESCE((SELECT MAX(log_id) FROM log_table WHERE action_type = 'ROLLBACK'), 0)
-                    ORDER BY log_id DESC
+                    ORDER BY 
+                        CASE table_name
+                            WHEN 'invoice_detail' THEN 1
+                            WHEN 'invoice_employee' THEN 2
+                            WHEN 'invoice' THEN 3
+                            WHEN 'details' THEN 4
+                            WHEN 'counteragent' THEN 5
+                            WHEN 'employee' THEN 6
+                            WHEN 'shelf' THEN 7
+                            WHEN 'rack' THEN 8
+                            WHEN 'room' THEN 9
+                            WHEN 'warehouse' THEN 10
+                            ELSE 11
+                        END,
+                        CASE action_type
+                            WHEN 'DELETE' THEN 1
+                            WHEN 'UPDATE' THEN 2
+                            WHEN 'INSERT' THEN 3
+                            ELSE 4
+                        END,
+                        log_id DESC
                 """, (self.initial_state_time,))
                 
                 changes = self.cursor.fetchall()
@@ -276,26 +371,43 @@ class WarehouseApp:
                 # Начинаем транзакцию
                 self.cursor.execute("BEGIN")
                 
-                # Обрабатываем изменения в обратном порядке
-                for table, action, record_id, old_values in reversed(changes):
+                # Обрабатываем изменения в правильном порядке
+                for table, action, record_id, old_values in changes:
                     try:
+                        pk = self.get_primary_key(table)
+                        if not pk:
+                            print(f"[WARNING] Не удалось определить PK для таблицы {table}")
+                            continue
+                        
                         if action == 'INSERT':
                             # Проверяем, существует ли запись перед удалением
                             self.cursor.execute(f"""
                                 SELECT 1 FROM {table} 
-                                WHERE {self.get_primary_key(table)} = %s
+                                WHERE {pk} = %s
                             """, (record_id,))
                             if self.cursor.fetchone():
                                 self.cursor.execute(f"""
                                     DELETE FROM {table} 
-                                    WHERE {self.get_primary_key(table)} = %s
+                                    WHERE {pk} = %s
                                 """, (record_id,))
                                 
                         elif action == 'DELETE' and old_values:
+                            # Проверяем зависимости для вставки
+                            if table == 'invoice_detail' or table == 'invoice_employee':
+                                # Проверяем существование invoice
+                                if 'invoiceid' in old_values:
+                                    self.cursor.execute("""
+                                        SELECT 1 FROM invoice 
+                                        WHERE invoice_id = %s
+                                    """, (old_values['invoiceid'],))
+                                    if not self.cursor.fetchone():
+                                        print(f"[WARNING] Пропуск вставки в {table}, invoice не существует")
+                                        continue
+                            
                             # Проверяем, не существует ли запись перед вставкой
                             self.cursor.execute(f"""
                                 SELECT 1 FROM {table} 
-                                WHERE {self.get_primary_key(table)} = %s
+                                WHERE {pk} = %s
                             """, (record_id,))
                             if not self.cursor.fetchone():
                                 columns = ', '.join(old_values.keys())
@@ -311,7 +423,7 @@ class WarehouseApp:
                             self.cursor.execute(f"""
                                 UPDATE {table} 
                                 SET {set_clause}
-                                WHERE {self.get_primary_key(table)} = %s
+                                WHERE {pk} = %s
                             """, list(old_values.values()) + [record_id])
                             
                     except psycopg2.Error as e:
@@ -340,6 +452,25 @@ class WarehouseApp:
 
     def get_primary_key(self, table_name):
         """Возвращает имя первичного ключа для таблицы с обработкой исключений"""
+        # Словарь соответствий имен таблиц и их первичных ключей
+        pk_mapping = {
+            'warehouse': 'warehouse_id',
+            'room': 'room_id',
+            'rack': 'rack_id',
+            'shelf': 'shelf_id',
+            'details': 'detail_id',
+            'counteragent': 'counteragent_id',
+            'invoice': 'invoice_id',
+            'invoice_detail': 'invoiceID',  
+            'employee': 'employee_id',
+            'invoice_employee': 'invoiceID',  
+            'log_table': 'log_id'
+        }
+        
+        # Возвращаем PK из словаря или пытаемся определить автоматически
+        if table_name in pk_mapping:
+            return pk_mapping[table_name]
+        
         try:
             self.cursor.execute("""
                 SELECT a.attname
@@ -348,9 +479,9 @@ class WarehouseApp:
                 WHERE i.indrelid = %s::regclass AND i.indisprimary
             """, (table_name,))
             result = self.cursor.fetchone()
-            return result[0] if result else 'id'
+            return result[0] if result else None
         except:
-            return 'id'
+            return None
 
     def create_backup(self):
         """Создает резервную копию базы данных"""
@@ -365,29 +496,34 @@ class WarehouseApp:
             if not backup_file:
                 return
                 
+            # Создаем переменные окружения с паролем
+            env = os.environ.copy()
+            env['PGPASSWORD'] = '12345'  # Замените на ваш реальный пароль PostgreSQL
+            
             # Выполняем pg_dump через subprocess
             command = [
-                'pg_dump',
+                r'C:\Program Files\PostgreSQL\17\bin\pg_dump',
                 '-h', '127.0.0.1',
-                '-U', 'warehouse_owner',
+                '-U', 'postgres',
                 '-d', 'Warehouse_DB',
                 '-F', 'c',  # custom format
                 '-f', backup_file
             ]
             
-            # Запускаем процесс (может запросить пароль)
+            # Запускаем процесс с переменными окружения
             process = subprocess.Popen(command, 
-                                     stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE)
+                                    env=env,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
             
-            # Если нужно ввести пароль (зависит от настройки pg_hba.conf)
-            process.communicate(input=b'password\n')  # Замените на реальный пароль
+            # Ждем завершения процесса
+            stdout, stderr = process.communicate()
             
             if process.returncode == 0:
                 messagebox.showinfo("Успех", f"Резервная копия успешно создана: {backup_file}")
             else:
-                messagebox.showerror("Ошибка", "Не удалось создать резервную копию")
+                error_msg = stderr.decode('utf-8') if stderr else "Неизвестная ошибка"
+                messagebox.showerror("Ошибка", f"Не удалось создать резервную копию: {error_msg}")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при создании резервной копии: {str(e)}")
 
@@ -404,30 +540,34 @@ class WarehouseApp:
                 return
                 
             if not messagebox.askyesno("Подтверждение", 
-                                      "Вы уверены, что хотите восстановить базу данных из резервной копии? Все текущие данные будут потеряны!"):
+                                    "Вы уверены, что хотите восстановить базу данных из резервной копии? Все текущие данные будут потеряны!"):
                 return
                 
             # Закрываем текущее соединение
             self.conn.close()
             
+            # Создаем переменные окружения с паролем
+            env = os.environ.copy()
+            env['PGPASSWORD'] = '12345'  # Замените на ваш реальный пароль PostgreSQL
+            
             # Выполняем pg_restore через subprocess
             command = [
-                'pg_restore',
+                r'C:\Program Files\PostgreSQL\17\bin\pg_restore',
                 '-h', '127.0.0.1',
-                '-U', 'warehouse_owner',
+                '-U', 'postgres',
                 '-d', 'Warehouse_DB',
                 '-c',  # Очистить базу перед восстановлением
                 backup_file
             ]
             
-            # Запускаем процесс (может запросить пароль)
+            # Запускаем процесс с переменными окружения
             process = subprocess.Popen(command, 
-                                     stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE)
+                                    env=env,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
             
-            # Если нужно ввести пароль (зависит от настройки pg_hba.conf)
-            process.communicate(input=b'password\n')  # Замените на реальный пароль
+            # Ждем завершения процесса
+            stdout, stderr = process.communicate()
             
             if process.returncode == 0:
                 messagebox.showinfo("Успех", "База данных успешно восстановлена из резервной копии")
@@ -435,15 +575,16 @@ class WarehouseApp:
                 # Перезапускаем приложение
                 self.root.destroy()
                 main_win = Tk()
-                app = WarehouseApp(main_win, self.current_user, 'password', None)  # Замените 'password' на реальный пароль
+                app = WarehouseApp(main_win, self.current_user, self.user_password, None)
                 main_win.mainloop()
             else:
-                messagebox.showerror("Ошибка", "Не удалось восстановить базу данных")
+                error_msg = stderr.decode('utf-8') if stderr else "Неизвестная ошибка"
+                messagebox.showerror("Ошибка", f"Не удалось восстановить базу данных: {error_msg}")
                 # Пытаемся восстановить соединение
                 self.conn = psycopg2.connect(
                     host="127.0.0.1",
                     user=self.current_user,
-                    password='password',  # Замените на реальный пароль
+                    password=self.user_password,
                     database="Warehouse_DB"
                 )
                 self.cursor = self.conn.cursor()
@@ -454,52 +595,46 @@ class WarehouseApp:
                 self.conn = psycopg2.connect(
                     host="127.0.0.1",
                     user=self.current_user,
-                    password='password',  # Замените на реальный пароль
+                    password=self.user_password,
                     database="Warehouse_DB"
                 )
                 self.cursor = self.conn.cursor()
             except:
                 self.root.destroy()
 
-    def edit_warehouse_structure(self):
-        """Редактирование структуры склада (склады, комнаты, стеллажи, полки)"""
-        edit_window = Toplevel(self.root)
-        edit_window.title("Редактирование структуры склада")
-        edit_window.geometry("600x400")
+    def create_structure_tab(self, parent, table_name, columns_ru):
+        """Создает вкладку для редактирования структуры склада с русскими названиями"""
+        # Соответствие русских названий английским
+        columns_map = {
+            "warehouse": {
+                "Номер склада": "warehouse_number",
+                "Адрес": "address"
+            },
+            "room": {
+                "Склад": "warehouseid",
+                "Номер комнаты": "room_number"
+            },
+            "rack": {
+                "Комната": "roomid",
+                "Номер стеллажа": "rack_number"
+            },
+            "shelf": {
+                "Стеллаж": "rackid",
+                "Номер полки": "shelf_number"
+            }
+        }
         
-        notebook = ttk.Notebook(edit_window)
-        notebook.pack(fill=BOTH, expand=True)
+        # Получаем английские названия колонок
+        columns_en = [columns_map[table_name][col] for col in columns_ru]
         
-        # Вкладка для складов
-        warehouse_tab = Frame(notebook)
-        notebook.add(warehouse_tab, text="Склады")
-        self.create_structure_tab(warehouse_tab, "warehouse", ["warehouse_number"])
-        
-        # Вкладка для комнат
-        room_tab = Frame(notebook)
-        notebook.add(room_tab, text="Комнаты")
-        self.create_structure_tab(room_tab, "room", ["warehouseid", "room_number"])
-        
-        # Вкладка для стеллажей
-        rack_tab = Frame(notebook)
-        notebook.add(rack_tab, text="Стеллажи")
-        self.create_structure_tab(rack_tab, "rack", ["roomid", "rack_number"])
-        
-        # Вкладка для полок
-        shelf_tab = Frame(notebook)
-        notebook.add(shelf_tab, text="Полки")
-        self.create_structure_tab(shelf_tab, "shelf", ["rackid", "shelf_number"])
-
-    def create_structure_tab(self, parent, table_name, columns):
-        """Создает вкладку для редактирования структуры склада"""
         # Treeview для отображения данных
-        tree = ttk.Treeview(parent, columns=("id", *columns), show="headings")
+        tree = ttk.Treeview(parent, columns=("id", *columns_ru), show="headings")
         tree.heading("id", text="ID")
         
         # Настраиваем заголовки и колонки
-        for col in columns:
+        for col in columns_ru:
             tree.heading(col, text=col)
-            tree.column(col, width=100)
+            tree.column(col, width=150)
         
         tree.column("id", width=50)
         
@@ -510,70 +645,272 @@ class WarehouseApp:
         
         tree.pack(fill=BOTH, expand=True)
         
-        # Загрузка данных
+        # Функция загрузки данных
         def load_data():
             tree.delete(*tree.get_children())
             self.cursor.execute(f"SELECT * FROM {table_name} ORDER BY 1")
             for row in self.cursor.fetchall():
-                tree.insert("", END, values=row)
+                # Преобразуем ID в читаемые значения для внешних ключей
+                formatted_row = [row[0]]  # ID
+                for i, col in enumerate(columns_en):
+                    if col.endswith("id"):
+                        # Для внешних ключей получаем связанные номера
+                        ref_table = col.replace("id", "")
+                        self.cursor.execute(f"SELECT {ref_table}_number FROM {ref_table} WHERE {ref_table}_id = %s", (row[i+1],))
+                        ref_number = self.cursor.fetchone()
+                        formatted_row.append(ref_number[0] if ref_number else "N/A")
+                    else:
+                        formatted_row.append(row[i+1])
+                tree.insert("", END, values=formatted_row)
         
+        # Функция поиска для конкретной вкладки
+        def search_items():
+            search_window = Toplevel(self.root)
+            search_window.title(f"Поиск в {table_name}")
+            
+            # Сохраняем текущие данные перед поиском
+            current_data = []
+            for item in tree.get_children():
+                current_data.append(tree.item(item)['values'])
+            
+            # Создаем элементы формы для поиска
+            Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
+            
+            search_vars = []
+            for i, col in enumerate(columns_ru):
+                Label(search_window, text=f"{col}:").grid(row=i+1, column=0, padx=5, pady=5, sticky=W)
+                var = StringVar()
+                
+                # Для внешних ключей делаем выпадающие списки
+                if columns_en[i].endswith("id"):
+                    ref_table = columns_en[i].replace("id", "")
+                    self.cursor.execute(f"SELECT {ref_table}_number FROM {ref_table} ORDER BY {ref_table}_number")
+                    options = [str(row[0]) for row in self.cursor.fetchall()]
+                    combo = ttk.Combobox(search_window, textvariable=var, values=options)
+                    combo.grid(row=i+1, column=1, padx=5, pady=5, sticky=EW)
+                else:
+                    Entry(search_window, textvariable=var).grid(row=i+1, column=1, padx=5, pady=5, sticky=EW)
+                
+                search_vars.append(var)
+            
+            def perform_search():
+                try:
+                    conditions = []
+                    params = []
+                    
+                    for i, col in enumerate(columns_en):
+                        search_text = search_vars[i].get()
+                        if search_text:
+                            if col.endswith("id"):
+                                # Для внешних ключей ищем по номеру
+                                ref_table = col.replace("id", "")
+                                self.cursor.execute(f"""
+                                    SELECT {ref_table}_id FROM {ref_table} 
+                                    WHERE {ref_table}_number = %s
+                                """, (search_text,))
+                                ref_id = self.cursor.fetchone()
+                                if ref_id:
+                                    conditions.append(f"{col} = %s")
+                                    params.append(ref_id[0])
+                            else:
+                                # Для обычных полей используем LIKE
+                                conditions.append(f"{col}::text LIKE %s")
+                                params.append(f"%{search_text}%")
+                    
+                    query = f"SELECT * FROM {table_name}"
+                    if conditions:
+                        query += " WHERE " + " AND ".join(conditions)
+                    query += " ORDER BY 1"
+                    
+                    tree.delete(*tree.get_children())
+                    self.cursor.execute(query, params)
+                    
+                    found_items = self.cursor.fetchall()
+                    
+                    if not found_items:
+                        messagebox.showinfo("Информация", "Записи не найдены")
+                        # Восстанавливаем исходные данные
+                        load_data()
+                        return
+                    
+                    for row in found_items:
+                        formatted_row = [row[0]]  # ID
+                        for i, col in enumerate(columns_en):
+                            if col.endswith("id"):
+                                ref_table = col.replace("id", "")
+                                self.cursor.execute(f"""
+                                    SELECT {ref_table}_number FROM {ref_table} 
+                                    WHERE {ref_table}_id = %s
+                                """, (row[i+1],))
+                                ref_number = self.cursor.fetchone()
+                                formatted_row.append(ref_number[0] if ref_number else "N/A")
+                            else:
+                                formatted_row.append(row[i+1])
+                        tree.insert("", END, values=formatted_row)
+                    
+                    search_window.destroy()
+                    messagebox.showinfo("Информация", f"Найдено {len(tree.get_children())} записей")
+                    
+                except Exception as e:
+                    messagebox.showerror("Ошибка", f"Ошибка поиска: {str(e)}")
+                    self.conn.rollback()
+                    # Восстанавливаем исходные данные при ошибке
+                    load_data()
+            
+            Button(search_window, text="Найти", command=perform_search).grid(
+                row=len(columns_ru)+1, column=0, padx=5, pady=10, sticky=EW)
+            Button(search_window, text="Сбросить", command=load_data).grid(
+                row=len(columns_ru)+1, column=1, padx=5, pady=10, sticky=EW)
+        
+        # Контекстное меню
+        menu = Menu(parent, tearoff=0)
+        menu.add_command(label="Добавить", command=lambda: self.add_structure_item(table_name, columns_en, columns_ru, load_data))
+        menu.add_command(label="Изменить", command=lambda: self.edit_structure_item(tree, table_name, columns_en, columns_ru, load_data))
+        menu.add_command(label="Удалить", command=lambda: self.delete_structure_item(tree, table_name, load_data))
+        menu.add_separator()
+        menu.add_command(label="Найти", command=search_items)  
+        menu.add_separator()
+        menu.add_command(label="Обновить", command=load_data)  
+        
+        def show_context_menu(event):
+            item = tree.identify_row(event.y)
+            if item:
+                tree.selection_set(item)
+                menu.post(event.x_root, event.y_root)
+        
+        tree.bind("<Button-3>", show_context_menu)
         load_data()
-        
-        # Кнопки управления
-        btn_frame = Frame(parent)
-        btn_frame.pack(fill=X, pady=5)
-        
-        btn_add = Button(btn_frame, text="Добавить", command=lambda: self.add_structure_item(table_name, columns, load_data))
-        btn_add.pack(side=LEFT, padx=5)
-        
-        btn_edit = Button(btn_frame, text="Изменить", command=lambda: self.edit_structure_item(tree, table_name, columns, load_data))
-        btn_edit.pack(side=LEFT, padx=5)
-        
-        btn_delete = Button(btn_frame, text="Удалить", command=lambda: self.delete_structure_item(tree, table_name, load_data))
-        btn_delete.pack(side=LEFT, padx=5)
-        
-        btn_refresh = Button(btn_frame, text="Обновить", command=load_data)
-        btn_refresh.pack(side=LEFT, padx=5)
 
-    def add_structure_item(self, table_name, columns, callback):
-        """Добавляет новый элемент структуры склада"""
+    def edit_warehouse_structure(self):
+        """Редактирование структуры склада (склады, комнаты, стеллажи, полки)"""
+        # Создаем новое окно для редактирования структуры
+        edit_window = Toplevel(self.root)
+        edit_window.title("Редактирование структуры склада")
+        edit_window.geometry("800x600")
+        
+        # Скрываем основное окно
+        self.root.withdraw()
+        
+        # Обработчик закрытия окна редактирования
+        def on_edit_window_close():
+            # Показываем основное окно снова
+            self.root.deiconify()
+            # Закрываем окно редактирования
+            edit_window.destroy()
+        
+        # Привязываем обработчик закрытия окна
+        edit_window.protocol("WM_DELETE_WINDOW", on_edit_window_close)
+        
+        notebook = ttk.Notebook(edit_window)
+        notebook.pack(fill=BOTH, expand=True)
+        
+        # Вкладка для складов
+        warehouse_tab = Frame(notebook)
+        notebook.add(warehouse_tab, text="Склады")
+        self.create_structure_tab(warehouse_tab, "warehouse", ["Номер склада", "Адрес"])
+        
+        # Вкладка для комнат
+        room_tab = Frame(notebook)
+        notebook.add(room_tab, text="Комнаты")
+        self.create_structure_tab(room_tab, "room", ["Склад", "Номер комнаты"])
+        
+        # Вкладка для стеллажей
+        rack_tab = Frame(notebook)
+        notebook.add(rack_tab, text="Стеллажи")
+        self.create_structure_tab(rack_tab, "rack", ["Комната", "Номер стеллажа"])
+        
+        # Вкладка для полок
+        shelf_tab = Frame(notebook)
+        notebook.add(shelf_tab, text="Полки")
+        self.create_structure_tab(shelf_tab, "shelf", ["Стеллаж", "Номер полки"])
+
+    def add_structure_item(self, table_name, columns_en, columns_ru, callback):
+        """Добавляет новый элемент структуры склада с проверкой уникальности"""
         add_window = Toplevel(self.root)
         add_window.title(f"Добавить в {table_name}")
         
         entries = []
         labels = []
         
-        for i, col in enumerate(columns):
-            labels.append(Label(add_window, text=col))
+        for i, (col_en, col_ru) in enumerate(zip(columns_en, columns_ru)):
+            labels.append(Label(add_window, text=col_ru))
             labels[-1].grid(row=i, column=0, padx=5, pady=5, sticky=W)
             
-            if col.endswith("id"):  # Это внешний ключ - делаем выпадающий список
-                ref_table = col.replace("id", "")
+            if col_en.endswith("id"):  # Это внешний ключ - делаем выпадающий список
+                ref_table = col_en.replace("id", "")
                 self.cursor.execute(f"SELECT {ref_table}_id, {ref_table}_number FROM {ref_table}")
-                options = [f"{id}: {num}" for id, num in self.cursor.fetchall()]
+                options = [f"{num} (ID: {id})" for id, num in self.cursor.fetchall()]
                 
                 var = StringVar()
                 combo = ttk.Combobox(add_window, textvariable=var, values=options)
                 combo.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
-                entries.append((var, True))  # True означает, что это combobox
+                entries.append((var, True, col_en))  # True означает, что это combobox
             else:
                 entry = Entry(add_window)
                 entry.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
-                entries.append((entry, False))
+                entries.append((entry, False, col_en))
         
         def save_item():
             try:
                 values = []
-                for entry, is_combo in entries:
+                parent_id = None
+                
+                # Проверяем уникальность номера перед добавлением
+                if table_name == "warehouse":
+                    # Для склада проверяем уникальность номера склада
+                    warehouse_number = entries[0][0].get()  # Первое поле - номер склада
+                    self.cursor.execute("SELECT 1 FROM warehouse WHERE warehouse_number = %s", (warehouse_number,))
+                    # Для склада проверяем уникальность адреса
+                    address = entries[1][0].get()  # Второе поле - адрес
+                    self.cursor.execute("SELECT 1 FROM warehouse WHERE address = %s", (address,))
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Склад с номером {warehouse_number} уже существует")
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Склад по адресу {address} уже существует")
+                
+                elif table_name == "room":
+                    # Для комнаты проверяем уникальность номера комнаты в пределах склада
+                    room_number = entries[1][0].get()  # Второе поле - номер комнаты
+                    warehouse_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
+                    self.cursor.execute("""
+                        SELECT 1 FROM room 
+                        WHERE room_number = %s AND warehouseID = %s
+                    """, (room_number, warehouse_id))
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Комната с номером {room_number} уже существует в этом складе")
+                
+                elif table_name == "rack":
+                    # Для стеллажа проверяем уникальность номера стеллажа в пределах комнаты
+                    rack_number = entries[1][0].get()  # Второе поле - номер стеллажа
+                    room_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
+                    self.cursor.execute("""
+                        SELECT 1 FROM rack 
+                        WHERE rack_number = %s AND roomID = %s
+                    """, (rack_number, room_id))
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Стеллаж с номером {rack_number} уже существует в этой комнате")
+                
+                elif table_name == "shelf":
+                    # Для полки проверяем уникальность номера полки в пределах стеллажа
+                    shelf_number = entries[1][0].get()  # Второе поле - номер полки
+                    rack_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
+                    self.cursor.execute("""
+                        SELECT 1 FROM shelf 
+                        WHERE shelf_number = %s AND rackID = %s
+                    """, (shelf_number, rack_id))
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Полка с номером {shelf_number} уже существует на этом стеллаже")
+                
+                # Если проверки пройдены, собираем значения
+                for entry, is_combo, col_en in entries:
                     if is_combo:
-                        # Для combobox получаем ID из значения "id: number"
-                        val = entry.get().split(":")[0].strip()
+                        val = entry.get().split("(ID: ")[1].replace(")", "").strip()
                         values.append(val)
                     else:
                         values.append(entry.get())
                 
-                columns_str = ", ".join(columns)
-                placeholders = ", ".join(["%s"] * len(columns))
+                columns_str = ", ".join(columns_en)
+                placeholders = ", ".join(["%s"] * len(columns_en))
                 
                 self.cursor.execute(
                     f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders})",
@@ -584,15 +921,17 @@ class WarehouseApp:
                 add_window.destroy()
                 callback()
                 messagebox.showinfo("Успех", "Запись успешно добавлена")
+            except ValueError as ve:
+                messagebox.showerror("Ошибка", str(ve))
             except Exception as e:
                 self.conn.rollback()
                 messagebox.showerror("Ошибка", f"Не удалось добавить запись: {str(e)}")
         
         Button(add_window, text="Сохранить", command=save_item).grid(
-            row=len(columns), column=0, columnspan=2, pady=10)
+            row=len(columns_en), column=0, columnspan=2, pady=10)
 
-    def edit_structure_item(self, tree, table_name, columns, callback):
-        """Редактирует элемент структуры склада"""
+    def edit_structure_item(self, tree, table_name, columns_en, columns_ru, callback):
+        """Редактирует элемент структуры склада с проверкой уникальности"""
         selected = tree.selection()
         if not selected:
             messagebox.showwarning("Предупреждение", "Выберите запись для редактирования")
@@ -604,73 +943,122 @@ class WarehouseApp:
         edit_window = Toplevel(self.root)
         edit_window.title(f"Изменить запись в {table_name}")
         
-        entries = []
-        labels = []
-        
         # Получаем текущие данные
         self.cursor.execute(f"SELECT * FROM {table_name} WHERE {table_name}_id = %s", (item_id,))
         current_data = self.cursor.fetchone()
         
-        for i, (col, val) in enumerate(zip(columns, current_data[1:])):  # Пропускаем ID
-            labels.append(Label(edit_window, text=col))
+        entries = []
+        labels = []
+        
+        for i, (col_en, col_ru) in enumerate(zip(columns_en, columns_ru)):
+            labels.append(Label(edit_window, text=col_ru))
             labels[-1].grid(row=i, column=0, padx=5, pady=5, sticky=W)
             
-            if col.endswith("id"):  # Это внешний ключ - делаем выпадающий список
-                ref_table = col.replace("id", "")
+            if col_en.endswith("id"):  # Это внешний ключ - делаем выпадающий список
+                ref_table = col_en.replace("id", "")
                 self.cursor.execute(f"SELECT {ref_table}_id, {ref_table}_number FROM {ref_table}")
-                options = [f"{id}: {num}" for id, num in self.cursor.fetchall()]
+                options = [f"{num} (ID: {id})" for id, num in self.cursor.fetchall()]
                 
                 # Находим текущее значение
-                current_option = None
-                for opt in options:
-                    if opt.startswith(str(val) + ":"):
-                        current_option = opt
-                        break
+                self.cursor.execute(f"SELECT {ref_table}_number FROM {ref_table} WHERE {ref_table}_id = %s", (current_data[i+1],))
+                current_ref = self.cursor.fetchone()
+                current_value = f"{current_ref[0]} (ID: {current_data[i+1]})" if current_ref else ""
                 
-                var = StringVar(value=current_option)
+                var = StringVar(value=current_value)
                 combo = ttk.Combobox(edit_window, textvariable=var, values=options)
                 combo.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
-                entries.append((var, True))  # True означает, что это combobox
+                entries.append((var, True, col_en))
             else:
                 entry = Entry(edit_window)
-                entry.insert(0, str(val))
+                entry.insert(0, str(current_data[i+1]))
                 entry.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
-                entries.append((entry, False))
+                entries.append((entry, False, col_en))
         
         def save_changes():
             try:
+                # Проверяем уникальность номера перед обновлением
+                if table_name == "warehouse":
+                    # Для склада проверяем уникальность адреса
+                    new_address = entries[1][0].get()
+                    self.cursor.execute("""
+                        SELECT 1 FROM warehouse 
+                        WHERE address = %s AND warehouse_id != %s
+                    """, (new_address, item_id))
+                    # Для склада проверяем уникальность номера склада
+                    warehouse_number = entries[0][0].get()
+                    self.cursor.execute("""
+                        SELECT 1 FROM warehouse 
+                        WHERE warehouse_number = %s AND warehouse_id != %s
+                    """, (warehouse_number, item_id))
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Склад по адресу {new_address} уже существует")
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Склад с номером {warehouse_number} уже существует")
+                
+                elif table_name == "room":
+                    # Для комнаты проверяем уникальность номера комнаты в пределах склада
+                    room_number = entries[1][0].get()
+                    warehouse_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
+                    self.cursor.execute("""
+                        SELECT 1 FROM room 
+                        WHERE room_number = %s AND warehouseID = %s AND room_id != %s
+                    """, (room_number, warehouse_id, item_id))
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Комната с номером {room_number} уже существует в этом складе")
+                
+                elif table_name == "rack":
+                    # Для стеллажа проверяем уникальность номера стеллажа в пределах комнаты
+                    rack_number = entries[1][0].get()
+                    room_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
+                    self.cursor.execute("""
+                        SELECT 1 FROM rack 
+                        WHERE rack_number = %s AND roomID = %s AND rack_id != %s
+                    """, (rack_number, room_id, item_id))
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Стеллаж с номером {rack_number} уже существует в этой комнате")
+                
+                elif table_name == "shelf":
+                    # Для полки проверяем уникальность номера полки в пределах стеллажа
+                    shelf_number = entries[1][0].get()
+                    rack_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
+                    self.cursor.execute("""
+                        SELECT 1 FROM shelf 
+                        WHERE shelf_number = %s AND rackID = %s AND shelf_id != %s
+                    """, (shelf_number, rack_id, item_id))
+                    if self.cursor.fetchone():
+                        raise ValueError(f"Полка с номером {shelf_number} уже существует на этом стеллаже")
+                
+                # Если проверки пройдены, собираем значения
                 values = []
-                for entry, is_combo in entries:
+                for entry, is_combo, col_en in entries:
                     if is_combo:
-                        # Для combobox получаем ID из значения "id: number"
-                        val = entry.get().split(":")[0].strip()
+                        val = entry.get().split("(ID: ")[1].replace(")", "").strip()
                         values.append(val)
                     else:
                         values.append(entry.get())
                 
-                # Добавляем ID в конец для WHERE
-                values.append(item_id)
-                
-                set_clause = ", ".join([f"{col} = %s" for col in columns])
+                set_clause = ", ".join([f"{col} = %s" for col in columns_en])
                 
                 self.cursor.execute(
                     f"UPDATE {table_name} SET {set_clause} WHERE {table_name}_id = %s",
-                    values
+                    values + [item_id]
                 )
                 
                 self.conn.commit()
                 edit_window.destroy()
                 callback()
                 messagebox.showinfo("Успех", "Запись успешно обновлена")
+            except ValueError as ve:
+                messagebox.showerror("Ошибка", str(ve))
             except Exception as e:
                 self.conn.rollback()
                 messagebox.showerror("Ошибка", f"Не удалось обновить запись: {str(e)}")
         
         Button(edit_window, text="Сохранить", command=save_changes).grid(
-            row=len(columns), column=0, columnspan=2, pady=10)
+            row=len(columns_en), column=0, columnspan=2, pady=10)
 
     def delete_structure_item(self, tree, table_name, callback):
-        """Удаляет элемент структуры склада"""
+        """Удаляет элемент структуры склада с обработкой ошибок"""
         selected = tree.selection()
         if not selected:
             messagebox.showwarning("Предупреждение", "Выберите запись для удаления")
@@ -679,15 +1067,57 @@ class WarehouseApp:
         item = tree.item(selected[0])
         item_id = item['values'][0]
         
-        if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите удалить запись с ID {item_id}?"):
-            try:
-                self.cursor.execute(f"DELETE FROM {table_name} WHERE {table_name}_id = %s", (item_id,))
-                self.conn.commit()
-                callback()
-                messagebox.showinfo("Успех", "Запись успешно удалена")
-            except Exception as e:
-                self.conn.rollback()
-                messagebox.showerror("Ошибка", f"Не удалось удалить запись: {str(e)}")
+        try:
+            # Проверяем, есть ли связанные детали
+            if table_name == "warehouse":
+                self.cursor.execute("""
+                    SELECT 1 FROM details WHERE shelfID IN (
+                        SELECT shelf_id FROM shelf WHERE rackID IN (
+                            SELECT rack_id FROM rack WHERE roomID IN (
+                                SELECT room_id FROM room WHERE warehouseID = %s
+                            )
+                        )
+                    ) LIMIT 1
+                """, (item_id,))
+            elif table_name == "room":
+                self.cursor.execute("""
+                    SELECT 1 FROM details WHERE shelfID IN (
+                        SELECT shelf_id FROM shelf WHERE rackID IN (
+                            SELECT rack_id FROM rack WHERE roomID = %s
+                        )
+                    ) LIMIT 1
+                """, (item_id,))
+            elif table_name == "rack":
+                self.cursor.execute("""
+                    SELECT 1 FROM details WHERE shelfID IN (
+                        SELECT shelf_id FROM shelf WHERE rackID = %s
+                    ) LIMIT 1
+                """, (item_id,))
+            elif table_name == "shelf":
+                self.cursor.execute("""
+                    SELECT 1 FROM details WHERE shelfID = %s LIMIT 1
+                """, (item_id,))
+            
+            has_details = self.cursor.fetchone()
+            
+            if has_details:
+                if not messagebox.askyesno(
+                    "Подтверждение", 
+                    "Это действие удалит все связанные детали. Продолжить?"
+                ):
+                    return
+            
+            # Выполняем удаление
+            self.cursor.execute(f"DELETE FROM {table_name} WHERE {table_name}_id = %s", (item_id,))
+            self.conn.commit()
+            callback()
+            messagebox.showinfo("Успех", "Запись успешно удалена")
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            error_msg = f"Ошибка удаления: {str(e)}"
+            if "нет доступа" in str(e):
+                error_msg += "\n\nНедостаточно прав для выполнения операции. Обратитесь к администратору."
+            messagebox.showerror("Ошибка", error_msg)
 
     def determine_user_permissions(self):
         self.can_access_invoices = False
