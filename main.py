@@ -5,7 +5,127 @@ from datetime import datetime
 import os
 import subprocess
 
-class WarehouseApp:
+class WindowApp:
+    def __init__(self):
+        self.app = None
+
+    def auth_window(self):
+        window = Tk()
+        window.geometry('%dx%d+%d+%d' % (500, 400, 
+                                        (window.winfo_screenwidth()/2) - (500/2), 
+                                        (window.winfo_screenheight()/2) - (400/2)))
+        window.title("Склад запчастей")
+        window.configure(background="#FFFAFA")
+        middle_window_x = 500 / 2
+        middle_window_y = 400 / 3
+        title_start = ttk.Label(master=window, text="Войдите в систему", 
+                            font=("algerian", 20), background="#FFFAFA")
+        title_start.place(x=middle_window_x, y=100, anchor="center")
+        title_login = ttk.Label(text="Логин:", font=("algerian", 10), background="#FFFAFA")
+        title_login.place(x=middle_window_x, y=140, anchor="center")
+        title_password = ttk.Label(text="Пароль:", font=("algerian", 10), background="#FFFAFA")
+        title_password.place(x=middle_window_x, y=200, anchor="center")
+        entry_name = ttk.Entry(width=50)
+        entry_name.place(x=middle_window_x, y=middle_window_y+30, anchor="center")
+        entry_password = ttk.Entry(width=50, show="*")
+        entry_password.place(x=middle_window_x, y=middle_window_y+90, anchor="center")
+        btn_in = ttk.Button(text="Войти", command=lambda: self.start_work(window, entry_name, entry_password))
+        btn_in.place(x=middle_window_x, y=middle_window_y+160, anchor="center")
+        window.mainloop()
+
+    def create_connection(self, login, password):
+        try:
+            connection = psycopg2.connect(
+                host="127.0.0.1",
+                user=login,
+                password=password,
+                database="Warehouse_DB"
+            )
+            print("[INFO] PostgreSQL connection open.")
+            return connection
+        except Exception as ex:
+            print(f"[CONNECTION ERROR] Failed to connect: {ex}")
+            return None
+
+    def start_work(self, window, name, password):
+        login, password = name.get(), password.get()
+        print(f"[AUTH] Attempting login for user: {login}")
+        active_user = self.create_connection(login, password)
+        if active_user is not None:
+            print("[AUTH] Login successful")
+            window.destroy()
+            main_win = Tk()
+            self.app = WarehouseApp(main_win, login, password, active_user)  
+            main_win.mainloop()
+        else:
+            print("[AUTH] Login failed")
+            messagebox.showerror('Ошибка авторизации', 
+                            'Произошла ошибка авторизации пользователя! Проверьте логин и пароль.')
+
+    def create_context_menu(self, event, tree, menu_items):
+        """Создание контекстного меню для Treeview с добавлением кнопки обновления"""
+        item = tree.identify_row(event.y)
+        if not item:
+            return
+            
+        tree.selection_set(item)
+        menu = Menu(self.root, tearoff=0)
+        for label, command in menu_items:
+            if command:
+                menu.add_command(label=label, command=command)
+            else:
+                menu.add_separator()
+        
+        # Добавляем пункт для принудительного обновления
+        menu.add_separator()
+        if tree == self.invoice_tree:
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.app.current_search_conditions.update({'invoice': None}), self.app.load_invoices()])
+        elif tree == self.warehouse_tree:
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.app.current_search_conditions.update({'warehouse': None}), self.app.load_warehouse()])
+        elif tree == self.counteragent_tree:
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.app.current_search_conditions.update({'counteragent': None}), self.app.load_counteragents()])
+        elif tree == self.employee_tree:
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.app.current_search_conditions.update({'employee': None}), self.app.load_employees()])
+        
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def create_settings_tab(self):
+        """Создает вкладку настроек для пользователя"""
+        tab = Frame(self.notebook)
+        self.notebook.add(tab, text="Настройки")
+        
+        # Основной фрейм для кнопок
+        frame = Frame(tab)
+        frame.pack(pady=20)
+        
+        # Кнопка отката для всех пользователей
+        btn_rollback = Button(frame, text="Откат системы к началу текущей сессии", 
+                            command=self.rollback_to_initial_state)
+        btn_rollback.pack(pady=10, fill=X)
+        
+        # Новая кнопка для отмены последней операции
+        btn_undo = Button(frame, text="Отменить последнюю операцию", 
+                        command=self.undo_last_operation)
+        btn_undo.pack(pady=10, fill=X)
+        
+        # Дополнительные функции для владельца
+        if self.current_user == 'owner':
+            btn_backup = Button(frame, text="Резервное копирование", 
+                            command=self.create_backup)
+            btn_backup.pack(pady=10, fill=X)
+            
+            btn_restore = Button(frame, text="Загрузка резервной копии", 
+                            command=self.restore_from_backup)
+            btn_restore.pack(pady=10, fill=X)
+            
+            btn_edit_warehouse = Button(frame, text="Редактирование структуры склада", 
+                                    command=self.edit_warehouse_structure)
+            btn_edit_warehouse.pack(pady=10, fill=X)
+
+class WarehouseApp(WindowApp):
     def __init__(self, root, login, password, active_user):
         self.root = root
         self.root.title("Управление складом")
@@ -14,6 +134,7 @@ class WarehouseApp:
         self.user_password = password
         self.initial_state = None
         self.is_search_active = False  
+        self.sort_states = {}
         
         # Добавляем атрибуты для хранения условий поиска
         self.current_search_conditions = {
@@ -51,6 +172,10 @@ class WarehouseApp:
             self.status_bar = Label(root, text=f"Вход выполнен как: {login} | Готово", bd=1, relief=SUNKEN, anchor=W)
             self.status_bar.pack(side=BOTTOM, fill=X)
             
+            # Добавьте кнопку выхода в правую часть статус бара
+            self.logout_btn = Button(self.status_bar, text="Выйти", command=self.logout)
+            self.logout_btn.pack(side=RIGHT, padx=5)
+            
             self.notebook = ttk.Notebook(root)
             self.notebook.pack(fill=BOTH, expand=True)
             
@@ -73,43 +198,89 @@ class WarehouseApp:
             messagebox.showerror("Ошибка подключения", f"Не удалось подключиться к базе данных: {str(e)}")
             self.root.destroy()
 
-    def on_close(self):
-        if hasattr(self, 'initial_transaction'):
-            self.initial_transaction.close()
-        if hasattr(self, 'conn') and self.conn:
-            self.conn.close()
-            print("[INFO] PostgreSQL connection closed.")
-        self.root.destroy()
-
-    def create_context_menu(self, event, tree, menu_items):
-        """Создание контекстного меню для Treeview с добавлением кнопки обновления"""
-        item = tree.identify_row(event.y)
-        if not item:
-            return
+    def logout(self):
+        """Выход из системы и возврат к окну авторизации"""
+        if messagebox.askyesno("Подтверждение", "Вы уверены, что хотите выйти из системы?"):
+            # Закрываем соединение с БД
+            if hasattr(self, 'conn') and self.conn:
+                self.conn.close()
+                print("[INFO] PostgreSQL connection closed.")
             
-        tree.selection_set(item)
-        menu = Menu(self.root, tearoff=0)
-        for label, command in menu_items:
-            if command:
-                menu.add_command(label=label, command=command)
-            else:
-                menu.add_separator()
+            # Закрываем главное окно
+            self.root.destroy()
+            
+            # Открываем окно авторизации
+            self.auth_window()
+
+    def on_close(self):
+        """Обработчик закрытия окна - выполняет выход из системы"""
+        self.logout()
+
+    def sort_treeview(self, tree, col, reverse, initial_order_col=None):
+        """Сортировка Treeview по столбцу"""
+        # Получаем все элементы из Treeview
+        data = [(tree.set(item, col), item) for item in tree.get_children('')]
         
-        # Добавляем пункт для принудительного обновления
-        menu.add_separator()
-        if tree == self.invoice_tree:
-            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'invoice': None}), self.load_invoices()])
-        elif tree == self.warehouse_tree:
-            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'warehouse': None}), self.load_warehouse()])
-        elif tree == self.counteragent_tree:
-            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'counteragent': None}), self.load_counteragents()])
-        elif tree == self.employee_tree:
-            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'employee': None}), self.load_employees()])
-        
+        # Определяем тип данных для сортировки
         try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+            # Пробуем преобразовать в число
+            data.sort(key=lambda x: float(x[0]), reverse=reverse)
+        except ValueError:
+            # Если не число, сортируем как строку
+            data.sort(key=lambda x: x[0].lower(), reverse=reverse)
+        
+        # Перемещаем элементы в отсортированном порядке
+        for index, (val, item) in enumerate(data):
+            tree.move(item, '', index)
+        
+        # Устанавливаем направление сортировки для следующего клика
+        tree.heading(col, command=lambda: self.sort_treeview(tree, col, not reverse, initial_order_col))
+        
+        # Если есть столбец для первоначального порядка (например, ID), добавляем кнопку сброса
+        if initial_order_col:
+            tree.heading(initial_order_col, 
+                        command=lambda: self.reset_sort(tree, initial_order_col, col))
+        
+        # Добавляем стрелочку в заголовок для индикации направления сортировки
+        tree.heading(col, text=col + (' ↓' if reverse else ' ↑'))
+
+    def reset_sort(self, tree, sort_col):
+        """Сброс сортировки к первоначальному состоянию"""
+        # Удаляем стрелочки из всех заголовков
+        for col in tree['columns']:
+            tree.heading(col, text=col)
+        
+        # Сортируем по первоначальному столбцу (обычно ID)
+        items = list(tree.get_children(''))
+        try:
+            items.sort(key=lambda x: int(tree.set(x, sort_col)))
+        except ValueError:
+            items.sort(key=lambda x: tree.set(x, sort_col).lower())
+        
+        for index, item in enumerate(items):
+            tree.move(item, '', index)
+        
+        # Восстанавливаем команды для заголовков
+        for col in tree['columns']:
+            tree.heading(col, command=lambda c=col: self.sort_treeview(tree, c, False, sort_col))
+
+    def reset_and_refresh(self, tree, sort_col, condition_key):
+        """Сброс сортировки и обновление данных"""
+        # Сбрасываем условия поиска
+        self.current_search_conditions.update({condition_key: None})
+        
+        # Сбрасываем сортировку
+        self.reset_sort(tree, sort_col)
+        
+        # Загружаем данные заново
+        if tree == self.invoice_tree:
+            self.load_invoices()
+        elif tree == self.warehouse_tree:
+            self.load_warehouse()
+        elif tree == self.counteragent_tree:
+            self.load_counteragents()
+        elif tree == self.employee_tree:
+            self.load_employees()
 
     def get_table_order(self):
         """Возвращает порядок таблиц для отката с учетом зависимостей"""
@@ -156,39 +327,6 @@ class WarehouseApp:
         else:
             # Если поиск активен, не обновляем автоматически
             pass
-    
-    def create_settings_tab(self):
-        """Создает вкладку настроек для пользователя"""
-        tab = Frame(self.notebook)
-        self.notebook.add(tab, text="Настройки")
-        
-        # Основной фрейм для кнопок
-        frame = Frame(tab)
-        frame.pack(pady=20)
-        
-        # Кнопка отката для всех пользователей
-        btn_rollback = Button(frame, text="Откат системы к началу текущей сессии", 
-                            command=self.rollback_to_initial_state)
-        btn_rollback.pack(pady=10, fill=X)
-        
-        # Новая кнопка для отмены последней операции
-        btn_undo = Button(frame, text="Отменить последнюю операцию", 
-                        command=self.undo_last_operation)
-        btn_undo.pack(pady=10, fill=X)
-        
-        # Дополнительные функции для владельца
-        if self.current_user == 'owner':
-            btn_backup = Button(frame, text="Резервное копирование", 
-                            command=self.create_backup)
-            btn_backup.pack(pady=10, fill=X)
-            
-            btn_restore = Button(frame, text="Загрузка резервной копии", 
-                            command=self.restore_from_backup)
-            btn_restore.pack(pady=10, fill=X)
-            
-            btn_edit_warehouse = Button(frame, text="Редактирование структуры склада", 
-                                    command=self.edit_warehouse_structure)
-            btn_edit_warehouse.pack(pady=10, fill=X)
 
     def undo_last_operation(self):
         """Отменяет последнюю операцию с учетом зависимостей"""
@@ -1194,13 +1332,29 @@ class WarehouseApp:
         """Создание вкладки для работы с накладными с учетом прав доступа"""
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Накладные")
+
+        # Фрейм для кнопок
+        button_frame = Frame(tab)
+        button_frame.pack(fill=X, padx=5, pady=5)
         
+        # Кнопка поиска
+        search_btn = Button(button_frame, text="Поиск", command=self.search_invoice)
+        search_btn.pack(side=LEFT, padx=2)
+        
+        # Кнопка обновления
+        refresh_btn = Button(button_frame, text="Обновить", 
+                    command=lambda: self.reset_and_refresh(self.invoice_tree, "ID", 'invoice'))
+        refresh_btn.pack(side=LEFT, padx=2)
+
         # Таблица накладных
         columns = ("ID", "Контрагент", "Дата", "Тип", "Статус", "Деталь", "Кол-во", "Ответственный")
         self.invoice_tree = ttk.Treeview(tab, columns=columns, show="headings")
         
         for col in columns:
-            self.invoice_tree.heading(col, text=col)
+            self.invoice_tree.heading(col, text=col, 
+                                    command=lambda c=col: self.sort_treeview(
+                                        self.invoice_tree, c, False, "ID"))
+            self.invoice_tree.column(col, width=100)  
         
         self.invoice_tree.column("ID", width=50)
         self.invoice_tree.column("Контрагент", width=150)
@@ -1231,13 +1385,6 @@ class WarehouseApp:
                 ("Обновить статус", self.update_invoice_status),
                 (None, None)  # разделитель
             ])
-        
-        # Добавляем пункт поиска для всех пользователей
-        menu_items.extend([
-            ("Найти накладную", self.search_invoice),
-            (None, None),  # разделитель
-            ("Обновить список", self.load_invoices)
-        ])
         
         self.invoice_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.invoice_tree, menu_items))
         self.invoice_tree.bind("<Delete>", lambda e: self.delete_invoice())
@@ -1319,18 +1466,33 @@ class WarehouseApp:
             print(f"[STATUS UPDATE ERROR] Initial error: {e}")
             messagebox.showerror("Ошибка", f"Ошибка при обновлении статуса: {str(e)}")
     
-    # Аналогично модифицируем другие методы создания вкладок:
     def create_warehouse_tab(self):
         """Создание вкладки для работы со складом с учетом прав доступа"""
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Склад")
+
+        # Фрейм для кнопок
+        button_frame = Frame(tab)
+        button_frame.pack(fill=X, padx=5, pady=5)
+        
+        # Кнопка поиска
+        search_btn = Button(button_frame, text="Поиск", command=self.search_warehouse_item)
+        search_btn.pack(side=LEFT, padx=2)
+        
+        # Кнопка обновления
+        refresh_btn = Button(button_frame, text="Обновить", 
+                    command=lambda: self.reset_and_refresh(self.warehouse_tree, "ID", 'warehouse'))
+        refresh_btn.pack(side=LEFT, padx=2)
         
         # Таблица склада
         columns = ("ID", "Склад", "Комната", "Стеллаж", "Полка", "Деталь", "Вес")
         self.warehouse_tree = ttk.Treeview(tab, columns=columns, show="headings")
         
         for col in columns:
-            self.warehouse_tree.heading(col, text=col)
+            self.warehouse_tree.heading(col, text=col, 
+                                    command=lambda c=col: self.sort_treeview(
+                                        self.warehouse_tree, c, False, "ID"))
+            self.warehouse_tree.column(col, width=100)  
         
         self.warehouse_tree.column("ID", width=50)
         self.warehouse_tree.column("Склад", width=100)
@@ -1356,13 +1518,6 @@ class WarehouseApp:
                 (None, None)  # разделитель
             ])
         
-        # Добавляем пункт поиска для всех пользователей
-        menu_items.extend([
-            ("Найти деталь", self.search_warehouse_item),
-            (None, None),  # разделитель
-            ("Обновить список", self.load_warehouse)
-        ])
-        
         self.warehouse_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.warehouse_tree, menu_items))
         self.warehouse_tree.bind("<Delete>", lambda e: self.delete_warehouse_item())
         
@@ -1373,9 +1528,29 @@ class WarehouseApp:
         """Создание вкладки для работы с контрагентами"""
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Контрагенты")
+
+        # Фрейм для кнопок
+        button_frame = Frame(tab)
+        button_frame.pack(fill=X, padx=5, pady=5)
+        
+        # Кнопка поиска
+        search_btn = Button(button_frame, text="Поиск", command=self.search_counteragent)
+        search_btn.pack(side=LEFT, padx=2)
+        
+        # Кнопка обновления
+        refresh_btn = Button(button_frame, text="Обновить", 
+                    command=lambda: self.reset_and_refresh(self.counteragent_tree, "ID", 'counteragent'))
+        refresh_btn.pack(side=LEFT, padx=2)
         
         # Таблица контрагентов
+        columns = ("ID", "Название", "Контакт", "Телефон", "Адрес")
         self.counteragent_tree = ttk.Treeview(tab, columns=("ID", "Название", "Контакт", "Телефон", "Адрес"), show="headings")
+
+        for col in columns:
+            self.counteragent_tree.heading(col, text=col, 
+                                    command=lambda c=col: self.sort_treeview(
+                                        self.counteragent_tree, c, False, "ID"))
+            self.counteragent_tree.column(col, width=100)
         
         self.counteragent_tree.heading("ID", text="ID")
         self.counteragent_tree.heading("Название", text="Название")
@@ -1405,13 +1580,6 @@ class WarehouseApp:
                 (None, None)  # разделитель
             ])
         
-        # Добавляем пункт поиска для всех пользователей
-        menu_items.extend([
-            ("Найти контрагента", self.search_counteragent),  # Используем существующий метод
-            (None, None),  # разделитель
-            ("Обновить список", self.load_counteragents)
-        ])
-        
         self.counteragent_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.counteragent_tree, menu_items))
         self.counteragent_tree.bind("<Delete>", lambda e: self.delete_counteragent())
         
@@ -1422,9 +1590,30 @@ class WarehouseApp:
         """Создание вкладки для работы с сотрудниками"""
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Сотрудники")
+
+        # Фрейм для кнопок
+        button_frame = Frame(tab)
+        button_frame.pack(fill=X, padx=5, pady=5)
+        
+        # Кнопка поиска
+        search_btn = Button(button_frame, text="Поиск", command=self.search_employee)
+        search_btn.pack(side=LEFT, padx=2)
+        
+        # Кнопка обновления
+        refresh_btn = Button(button_frame, text="Обновить", 
+                    command=lambda: self.reset_and_refresh(self.employee_tree, "ID", 'employee'))
+        refresh_btn.pack(side=LEFT, padx=2)
         
         # Таблица сотрудников
+        columns = ("ID", "Роль", "Фамилия", "Имя", "Отчество")
         self.employee_tree = ttk.Treeview(tab, columns=("ID", "Роль", "Фамилия", "Имя", "Отчество"), show="headings")
+
+        for col in columns:
+            self.employee_tree.heading(col, text=col, 
+                                    command=lambda c=col: self.sort_treeview(
+                                        self.employee_tree, c, False, "ID"))
+            self.employee_tree.column(col, width=100)  
+        
         
         self.employee_tree.heading("ID", text="ID")
         self.employee_tree.heading("Роль", text="Роль")
@@ -1453,14 +1642,6 @@ class WarehouseApp:
                 ("Удалить сотрудника", self.delete_employee),
                 (None, None)  # разделитель
             ])
-        
-        # Добавляем пункт поиска для всех пользователей
-        menu_items.extend([
-            ("Найти сотрудника", self.search_employee),
-            (None, None),  # разделитель
-            ("Обновить список", self.load_employees)
-        ])
-        
         self.employee_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.employee_tree, menu_items))
         self.employee_tree.bind("<Delete>", lambda e: self.delete_employee())
     
@@ -3397,54 +3578,7 @@ class WarehouseApp:
                 self.conn.rollback()
                 messagebox.showerror("Ошибка", f"Не удалось удалить сотрудника: {str(e)}")
 
-def create_connection(login, password):
-    try:
-        connection = psycopg2.connect(
-            host="127.0.0.1",
-            user=login,
-            password=password,
-            database="Warehouse_DB"
-        )
-        print("[INFO] PostgreSQL connection open.")
-        return connection
-    except Exception as ex:
-        print(f"[CONNECTION ERROR] Failed to connect: {ex}")
-        return None
 
-def start_work():
-    login, password = entry_name.get(), entry_password.get()
-    print(f"[AUTH] Attempting login for user: {login}")
-    active_user = create_connection(login, password)
-    if active_user is not None:
-        print("[AUTH] Login successful")
-        window.destroy()
-        main_win = Tk()
-        app = WarehouseApp(main_win, login, password, active_user)  
-        main_win.mainloop()
-    else:
-        print("[AUTH] Login failed")
-        messagebox.showerror('Ошибка авторизации', 
-                           'Произошла ошибка авторизации пользователя! Проверьте логин и пароль.')
+
+WindowApp().auth_window()
         
-window = Tk()
-window.geometry('%dx%d+%d+%d' % (500, 400, 
-                                (window.winfo_screenwidth()/2) - (500/2), 
-                                (window.winfo_screenheight()/2) - (400/2)))
-window.title("Склад запчастей")
-window.configure(background="#FFFAFA")
-middle_window_x = 500 / 2
-middle_window_y = 400 / 3
-title_start = ttk.Label(master=window, text="Войдите в систему", 
-                       font=("algerian", 20), background="#FFFAFA")
-title_start.place(x=middle_window_x, y=100, anchor="center")
-title_login = ttk.Label(text="Логин:", font=("algerian", 10), background="#FFFAFA")
-title_login.place(x=middle_window_x, y=140, anchor="center")
-title_password = ttk.Label(text="Пароль:", font=("algerian", 10), background="#FFFAFA")
-title_password.place(x=middle_window_x, y=200, anchor="center")
-entry_name = ttk.Entry(width=50)
-entry_name.place(x=middle_window_x, y=middle_window_y+30, anchor="center")
-entry_password = ttk.Entry(width=50, show="*")
-entry_password.place(x=middle_window_x, y=middle_window_y+90, anchor="center")
-btn_in = ttk.Button(text="Войти", command=start_work)
-btn_in.place(x=middle_window_x, y=middle_window_y+160, anchor="center")
-window.mainloop()

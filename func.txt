@@ -1,0 +1,76 @@
+-- FUNCTION: public.convert_text_to_boolean(text, text)
+
+-- DROP FUNCTION IF EXISTS public.convert_text_to_boolean(text, text);
+
+CREATE OR REPLACE FUNCTION public.convert_text_to_boolean(
+	text_value text,
+	field_type text DEFAULT 'status'::text)
+    RETURNS boolean
+    LANGUAGE 'plpgsql'
+    COST 100
+    IMMUTABLE PARALLEL UNSAFE
+AS $BODY$
+BEGIN
+    text_value := LOWER(TRIM(text_value));
+    
+    -- Для типа накладной
+    IF field_type = 'type' THEN
+        RETURN text_value IN ('выгрузка', 'выгрузить', 'отправка', 'true', '1', 'да', 'yes', 'y');
+    -- Для статуса
+    ELSE
+        RETURN text_value IN ('завершено', 'готово', 'выполнено', 'done', 'true', '1', 'да', 'yes', 'y');
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.convert_text_to_boolean(text, text)
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.convert_text_to_boolean(text, text) TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.convert_text_to_boolean(text, text) TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.convert_text_to_boolean(text, text) TO warehouse_owner;
+
+-- FUNCTION: public.get_employee_id(character varying, character varying, character varying)
+
+-- DROP FUNCTION IF EXISTS public.get_employee_id(character varying, character varying, character varying);
+
+CREATE OR REPLACE FUNCTION public.get_employee_id(
+	p_last_name character varying,
+	p_first_name character varying,
+	p_patronymic character varying)
+    RETURNS integer
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE SECURITY DEFINER PARALLEL UNSAFE
+AS $BODY$
+DECLARE
+    v_id integer;
+BEGIN
+    SELECT employee_id INTO v_id 
+    FROM employee 
+    WHERE last_name = p_last_name 
+    AND first_name = p_first_name 
+    AND patronymic = p_patronymic;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Сотрудник % % % не найден', 
+            p_last_name, p_first_name, p_patronymic;
+    END IF;
+    
+    RETURN v_id;
+END;
+$BODY$;
+
+ALTER FUNCTION public.get_employee_id(character varying, character varying, character varying)
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.get_employee_id(character varying, character varying, character varying) TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.get_employee_id(character varying, character varying, character varying) TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.get_employee_id(character varying, character varying, character varying) TO warehouse_manager;
+
+GRANT EXECUTE ON FUNCTION public.get_employee_id(character varying, character varying, character varying) TO warehouse_owner;
+

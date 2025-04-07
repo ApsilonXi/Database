@@ -1,0 +1,620 @@
+-- FUNCTION: public.delete_invoice_details_view()
+
+-- DROP FUNCTION IF EXISTS public.delete_invoice_details_view();
+
+CREATE OR REPLACE FUNCTION public.delete_invoice_details_view()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF SECURITY DEFINER
+AS $BODY$
+BEGIN
+    -- Удаляем связанные записи в правильном порядке (чтобы избежать нарушений ограничений внешнего ключа)
+    
+    -- 1. Удаляем связи с сотрудниками
+    DELETE FROM invoice_employee WHERE invoiceID = OLD.invoice_id;
+    
+    -- 2. Удаляем детали накладной
+    DELETE FROM invoice_detail WHERE invoiceID = OLD.invoice_id;
+    
+    -- 3. Удаляем саму накладную
+    DELETE FROM invoice WHERE invoice_id = OLD.invoice_id;
+    
+    RETURN OLD;
+END;
+$BODY$;
+
+ALTER FUNCTION public.delete_invoice_details_view()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.delete_invoice_details_view() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.delete_invoice_details_view() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.delete_invoice_details_view() TO warehouse_owner;
+
+-- FUNCTION: public.delete_related_data()
+
+-- DROP FUNCTION IF EXISTS public.delete_related_data();
+
+CREATE OR REPLACE FUNCTION public.delete_related_data()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF SECURITY DEFINER
+AS $BODY$
+BEGIN
+    -- Для склада удаляем связанные комнаты, стеллажи, полки и детали
+    IF TG_TABLE_NAME = 'warehouse' THEN
+        -- Удаляем детали через отдельный запрос с явными правами
+        PERFORM * FROM details WHERE shelfID IN (
+            SELECT shelf_id FROM shelf WHERE rackID IN (
+                SELECT rack_id FROM rack WHERE roomID IN (
+                    SELECT room_id FROM room WHERE warehouseID = OLD.warehouse_id
+                )
+            )
+        ) LIMIT 1;
+        
+        DELETE FROM shelf WHERE rackID IN (
+            SELECT rack_id FROM rack WHERE roomID IN (
+                SELECT room_id FROM room WHERE warehouseID = OLD.warehouse_id
+            )
+        );
+        DELETE FROM rack WHERE roomID IN (
+            SELECT room_id FROM room WHERE warehouseID = OLD.warehouse_id
+        );
+        DELETE FROM room WHERE warehouseID = OLD.warehouse_id;
+    
+    -- Для комнаты удаляем связанные стеллажи, полки и детали
+    ELSIF TG_TABLE_NAME = 'room' THEN
+        PERFORM * FROM details WHERE shelfID IN (
+            SELECT shelf_id FROM shelf WHERE rackID IN (
+                SELECT rack_id FROM rack WHERE roomID = OLD.room_id
+            )
+        ) LIMIT 1;
+        
+        DELETE FROM shelf WHERE rackID IN (
+            SELECT rack_id FROM rack WHERE roomID = OLD.room_id
+        );
+        DELETE FROM rack WHERE roomID = OLD.room_id;
+    
+    -- Для стеллажа удаляем связанные полки и детали
+    ELSIF TG_TABLE_NAME = 'rack' THEN
+        PERFORM * FROM details WHERE shelfID IN (
+            SELECT shelf_id FROM shelf WHERE rackID = OLD.rack_id
+        ) LIMIT 1;
+        
+        DELETE FROM shelf WHERE rackID = OLD.rack_id;
+    
+    -- Для полки удаляем связанные детали
+    ELSIF TG_TABLE_NAME = 'shelf' THEN
+        PERFORM * FROM details WHERE shelfID = OLD.shelf_id LIMIT 1;
+    END IF;
+    RETURN OLD;
+END;
+$BODY$;
+
+ALTER FUNCTION public.delete_related_data()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.delete_related_data() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.delete_related_data() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.delete_related_data() TO warehouse_owner;
+
+-- FUNCTION: public.log_counteragent_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_counteragent_changes();
+
+CREATE OR REPLACE FUNCTION public.log_counteragent_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('counteragent', 'INSERT', NEW.counteragent_id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('counteragent', 'UPDATE', OLD.counteragent_id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('counteragent', 'DELETE', OLD.counteragent_id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_counteragent_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_counteragent_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_counteragent_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_counteragent_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_details_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_details_changes();
+
+CREATE OR REPLACE FUNCTION public.log_details_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('details', 'INSERT', NEW.detail_id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('details', 'UPDATE', OLD.detail_id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('details', 'DELETE', OLD.detail_id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_details_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_details_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_details_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_details_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_employee_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_employee_changes();
+
+CREATE OR REPLACE FUNCTION public.log_employee_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('employee', 'INSERT', NEW.employee_id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('employee', 'UPDATE', OLD.employee_id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('employee', 'DELETE', OLD.employee_id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_employee_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_employee_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_employee_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_employee_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_invoice_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_invoice_changes();
+
+CREATE OR REPLACE FUNCTION public.log_invoice_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('invoice', 'INSERT', NEW.invoice_id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('invoice', 'UPDATE', OLD.invoice_id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('invoice', 'DELETE', OLD.invoice_id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_invoice_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_invoice_detail_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_invoice_detail_changes();
+
+CREATE OR REPLACE FUNCTION public.log_invoice_detail_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('invoice_detail', 'INSERT', NEW.invoiceID, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('invoice_detail', 'UPDATE', OLD.invoiceID, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('invoice_detail', 'DELETE', OLD.invoiceID, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_invoice_detail_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_detail_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_detail_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_detail_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_invoice_employee_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_invoice_employee_changes();
+
+CREATE OR REPLACE FUNCTION public.log_invoice_employee_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('invoice_employee', 'INSERT', NEW.invoiceID, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('invoice_employee', 'UPDATE', OLD.invoiceID, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('invoice_employee', 'DELETE', OLD.invoiceID, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_invoice_employee_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_employee_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_employee_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_invoice_employee_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_rack_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_rack_changes();
+
+CREATE OR REPLACE FUNCTION public.log_rack_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('rack', 'INSERT', NEW.rack_id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('rack', 'UPDATE', OLD.rack_id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('rack', 'DELETE', OLD.rack_id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_rack_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_rack_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_rack_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_rack_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_room_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_room_changes();
+
+CREATE OR REPLACE FUNCTION public.log_room_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('room', 'INSERT', NEW.room_id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('room', 'UPDATE', OLD.room_id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('room', 'DELETE', OLD.room_id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_room_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_room_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_room_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_room_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_shelf_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_shelf_changes();
+
+CREATE OR REPLACE FUNCTION public.log_shelf_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('shelf', 'INSERT', NEW.shelf_id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('shelf', 'UPDATE', OLD.shelf_id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('shelf', 'DELETE', OLD.shelf_id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_shelf_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_shelf_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_shelf_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_shelf_changes() TO warehouse_owner;
+
+-- FUNCTION: public.log_warehouse_changes()
+
+-- DROP FUNCTION IF EXISTS public.log_warehouse_changes();
+
+CREATE OR REPLACE FUNCTION public.log_warehouse_changes()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, new_values)
+        VALUES ('warehouse', 'INSERT', NEW.warehouse_id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values, new_values)
+        VALUES ('warehouse', 'UPDATE', OLD.warehouse_id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO log_table (table_name, action_type, record_id, old_values)
+        VALUES ('warehouse', 'DELETE', OLD.warehouse_id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+END;
+$BODY$;
+
+ALTER FUNCTION public.log_warehouse_changes()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_warehouse_changes() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.log_warehouse_changes() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.log_warehouse_changes() TO warehouse_owner;
+
+-- FUNCTION: public.update_invoice_details_view()
+
+-- DROP FUNCTION IF EXISTS public.update_invoice_details_view();
+
+CREATE OR REPLACE FUNCTION public.update_invoice_details_view()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+DECLARE
+    v_updated BOOLEAN := FALSE;
+BEGIN
+    -- 1. Если обновляется тип накладной (через текстовое поле)
+    IF NEW.type_invoice_text IS DISTINCT FROM OLD.type_invoice_text THEN
+        UPDATE invoice SET 
+            type_invoice = convert_text_to_boolean(NEW.type_invoice_text, 'type')
+        WHERE invoice_id = NEW.invoice_id;
+        v_updated := TRUE;
+    END IF;
+    
+    -- 2. Если обновляется статус (через текстовое поле)
+    IF NEW.status_text IS DISTINCT FROM OLD.status_text THEN
+        UPDATE invoice SET 
+            status = convert_text_to_boolean(NEW.status_text, 'status')
+        WHERE invoice_id = NEW.invoice_id;
+        v_updated := TRUE;
+    END IF;
+    
+    -- 3. Проверяем, что не пытаются изменить другие поля
+    IF NOT v_updated AND (
+        NEW.invoice_id IS DISTINCT FROM OLD.invoice_id OR
+        NEW.counteragent_name IS DISTINCT FROM OLD.counteragent_name OR
+        NEW.date_time IS DISTINCT FROM OLD.date_time OR
+        NEW.type_detail IS DISTINCT FROM OLD.type_detail OR
+        NEW.quantity IS DISTINCT FROM OLD.quantity OR
+        NEW.responsible_last_name IS DISTINCT FROM OLD.responsible_last_name OR
+        NEW.responsible_first_name IS DISTINCT FROM OLD.responsible_first_name OR
+        NEW.responsible_patronymic IS DISTINCT FROM OLD.responsible_patronymic
+    ) THEN
+        RAISE EXCEPTION 'Разрешено обновлять только поля type_invoice_text и status_text';
+    END IF;
+    
+    RETURN NEW;
+END;
+$BODY$;
+
+ALTER FUNCTION public.update_invoice_details_view()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.update_invoice_details_view() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.update_invoice_details_view() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.update_invoice_details_view() TO warehouse_owner;
+
+-- FUNCTION: public.update_invoice_status()
+
+-- DROP FUNCTION IF EXISTS public.update_invoice_status();
+
+CREATE OR REPLACE FUNCTION public.update_invoice_status()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF SECURITY DEFINER
+AS $BODY$
+BEGIN
+    -- Разрешаем обновлять только поле status
+    IF TG_OP = 'UPDATE' AND (
+        OLD.invoice_id IS DISTINCT FROM NEW.invoice_id OR
+        OLD.counteragent_name IS DISTINCT FROM NEW.counteragent_name OR
+        OLD.date_time IS DISTINCT FROM NEW.date_time OR
+        OLD.type_invoice IS DISTINCT FROM NEW.type_invoice OR
+        OLD.type_detail IS DISTINCT FROM NEW.type_detail OR
+        OLD.quantity IS DISTINCT FROM NEW.quantity OR
+        OLD.responsible_last_name IS DISTINCT FROM NEW.responsible_last_name OR
+        OLD.responsible_first_name IS DISTINCT FROM NEW.responsible_first_name OR
+        OLD.responsible_patronymic IS DISTINCT FROM NEW.responsible_patronymic OR
+        OLD.responsible_id IS DISTINCT FROM NEW.responsible_id
+    ) THEN
+        RAISE EXCEPTION 'Разрешено обновлять только поле status. Попытка изменить другие поля запрещена.';
+    END IF;
+    
+    -- Проверяем, что статус действительно изменился
+    IF OLD.status IS NOT DISTINCT FROM NEW.status THEN
+        RETURN NEW; -- Ничего не делаем, если статус не изменился
+    END IF;
+    
+    -- Обновляем статус в основной таблице
+    UPDATE invoice SET status = NEW.status 
+    WHERE invoice_id = NEW.invoice_id;
+    
+    RETURN NEW;
+END;
+$BODY$;
+
+ALTER FUNCTION public.update_invoice_status()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.update_invoice_status() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.update_invoice_status() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.update_invoice_status() TO warehouse_owner;
+
+-- FUNCTION: public.update_warehouse_details_view()
+
+-- DROP FUNCTION IF EXISTS public.update_warehouse_details_view();
+
+CREATE OR REPLACE FUNCTION public.update_warehouse_details_view()
+    RETURNS trigger
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE NOT LEAKPROOF
+AS $BODY$
+BEGIN
+    -- Обновляем таблицу details
+    UPDATE details
+    SET type_detail = NEW.type_detail, weight = NEW.weight
+    WHERE detail_id = OLD.detail_id;
+
+    -- Обновляем таблицу shelf
+    UPDATE shelf
+    SET shelf_number = NEW.shelf_number
+    WHERE shelf_id = (SELECT shelfID FROM details WHERE detail_id = OLD.detail_id);
+
+    -- Обновляем таблицу rack
+    UPDATE rack
+    SET rack_number = NEW.rack_number
+    WHERE rack_id = (SELECT rackID FROM shelf WHERE shelf_id = (SELECT shelfID FROM details WHERE detail_id = OLD.detail_id));
+
+    -- Обновляем таблицу room
+    UPDATE room
+    SET room_number = NEW.room_number
+    WHERE room_id = (SELECT roomID FROM rack WHERE rack_id = (SELECT rackID FROM shelf WHERE shelf_id = (SELECT shelfID FROM details WHERE detail_id = OLD.detail_id)));
+
+    -- Обновляем таблицу warehouse
+    UPDATE warehouse
+    SET warehouse_number = NEW.warehouse_number
+    WHERE warehouse_id = (SELECT warehouseID FROM room WHERE room_id = (SELECT roomID FROM rack WHERE rack_id = (SELECT rackID FROM shelf WHERE shelf_id = (SELECT shelfID FROM details WHERE detail_id = OLD.detail_id))));
+
+    RETURN NEW;
+END;
+$BODY$;
+
+ALTER FUNCTION public.update_warehouse_details_view()
+    OWNER TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.update_warehouse_details_view() TO PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.update_warehouse_details_view() TO postgres;
+
+GRANT EXECUTE ON FUNCTION public.update_warehouse_details_view() TO warehouse_owner;
+
+
