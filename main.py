@@ -239,7 +239,7 @@ class WarehouseApp(WindowApp):
         # Если есть столбец для первоначального порядка (например, ID), добавляем кнопку сброса
         if initial_order_col:
             tree.heading(initial_order_col, 
-                        command=lambda: self.reset_sort(tree, initial_order_col, col))
+                        command=lambda: self.reset_sort(tree, col))
         
         # Добавляем стрелочку в заголовок для индикации направления сортировки
         tree.heading(col, text=col + (' ↓' if reverse else ' ↑'))
