@@ -79,13 +79,13 @@ class WindowApp:
         # Добавляем пункт для принудительного обновления
         menu.add_separator()
         if tree == self.invoice_tree:
-            menu.add_command(label="Обновить таблицу", command=lambda: [self.app.current_search_conditions.update({'invoice': None}), self.app.load_invoices()])
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'invoice': None}), self.app.load_invoices()])
         elif tree == self.warehouse_tree:
-            menu.add_command(label="Обновить таблицу", command=lambda: [self.app.current_search_conditions.update({'warehouse': None}), self.app.load_warehouse()])
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'warehouse': None}), self.app.load_warehouse()])
         elif tree == self.counteragent_tree:
-            menu.add_command(label="Обновить таблицу", command=lambda: [self.app.current_search_conditions.update({'counteragent': None}), self.app.load_counteragents()])
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'counteragent': None}), self.app.load_counteragents()])
         elif tree == self.employee_tree:
-            menu.add_command(label="Обновить таблицу", command=lambda: [self.app.current_search_conditions.update({'employee': None}), self.app.load_employees()])
+            menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'employee': None}), self.app.load_employees()])
         
         try:
             menu.tk_popup(event.x_root, event.y_root)
@@ -215,6 +215,82 @@ class WarehouseApp(WindowApp):
     def on_close(self):
         """Обработчик закрытия окна - выполняет выход из системы"""
         self.logout()
+
+    def load_available_details(self, combobox):
+        """Загружает список доступных деталей в комбобокс"""
+        try:
+            self.cursor.execute("""
+                SELECT DISTINCT type_detail 
+                FROM details
+                ORDER BY type_detail
+            """)
+            details = [row[0] for row in self.cursor.fetchall()]
+            combobox['values'] = details
+        except Exception as e:
+            print(f"[ERROR] Failed to load details: {e}")
+
+    def search_detail(self, detail_var):
+        """Открывает окно поиска деталей на складе"""
+        search_window = Toplevel(self.root)
+        search_window.title("Выбор детали")
+        search_window.geometry("400x300")
+        
+        # Поле поиска
+        search_frame = Frame(search_window)
+        search_frame.pack(fill=X, padx=5, pady=5)
+        
+        search_var = StringVar()
+        search_entry = Entry(search_frame, textvariable=search_var)
+        search_entry.pack(side=LEFT, expand=True, fill=X, padx=(0, 5))
+        
+        search_btn = Button(search_frame, text="Найти", 
+                        command=lambda: self.perform_detail_search(detail_listbox, search_var.get()))
+        search_btn.pack(side=LEFT)
+        
+        # Список деталей
+        detail_listbox = Listbox(search_window)
+        detail_listbox.pack(fill=BOTH, expand=True, padx=5, pady=5)
+        
+        # Кнопка выбора
+        select_btn = Button(search_window, text="Выбрать",
+                        command=lambda: self.select_detail(detail_listbox, detail_var, search_window))
+        select_btn.pack(pady=5)
+        
+        # Загружаем все детали при открытии
+        self.perform_detail_search(detail_listbox, "")
+        
+        # Поиск при нажатии Enter в поле поиска
+        search_entry.bind("<Return>", lambda e: self.perform_detail_search(detail_listbox, search_var.get()))
+        # Выбор при двойном клике
+        detail_listbox.bind("<Double-Button-1>", lambda e: self.select_detail(detail_listbox, detail_var, search_window))
+
+    def perform_detail_search(self, listbox, search_text):
+        """Выполняет поиск деталей по заданному тексту"""
+        listbox.delete(0, END)
+        try:
+            query = """
+                SELECT DISTINCT type_detail
+                FROM details
+                WHERE type_detail ILIKE %s
+                ORDER BY type_detail
+            """
+            self.cursor.execute(query, (f"%{search_text}%",))
+            
+            for row in self.cursor.fetchall():
+                listbox.insert(END, row[0])
+        except Exception as e:
+            print(f"[ERROR] Failed to search details: {e}")
+
+    def select_detail(self, listbox, detail_var, window):
+        """Выбирает деталь из списка"""
+        selection = listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Предупреждение", "Выберите деталь из списка")
+            return
+        
+        selected_detail = listbox.get(selection[0])
+        detail_var.set(selected_detail)
+        window.destroy()
 
     def sort_treeview(self, tree, col, reverse, initial_order_col=None):
         """Сортировка Treeview по столбцу"""
@@ -2278,10 +2354,17 @@ class WarehouseApp(WindowApp):
             status_combobox.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
             
             # Изменено: поле ввода вместо выпадающего списка
-            Label(add_window, text="Деталь:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
+            detail_frame = Frame(add_window)  # или edit_window для edit_invoice
+            detail_frame.grid(row=4, column=0, columnspan=2, padx=5, pady=5, sticky=EW)
+
+            Label(detail_frame, text="Деталь:").pack(side=LEFT, padx=(0, 5))
             detail_var = StringVar()
-            detail_entry = Entry(add_window, textvariable=detail_var)
-            detail_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
+            detail_entry = Entry(detail_frame, textvariable=detail_var)
+            detail_entry.pack(side=LEFT, expand=True, fill=X)
+
+            # Кнопка "лупа" для поиска деталей
+            search_btn = Button(detail_frame, text="🔍", command=lambda: self.search_detail(detail_var))
+            search_btn.pack(side=LEFT, padx=(5, 0))
             
             Label(add_window, text="Количество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
             quantity_entry = Entry(add_window)
@@ -2512,11 +2595,18 @@ class WarehouseApp(WindowApp):
             status_combobox.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
             
             # Заменяем Combobox на Entry для типа детали
-            Label(edit_window, text="Тип детали:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
-            detail_var = StringVar(value=invoice_data[5])  # invoice_data[5] — это type_detail
-            detail_entry = Entry(edit_window, textvariable=detail_var)
-            detail_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
-            
+            detail_frame = Frame(edit_window)  # или edit_window для edit_invoice
+            detail_frame.grid(row=4, column=0, columnspan=2, padx=5, pady=5, sticky=EW)
+
+            Label(detail_frame, text="Деталь:").pack(side=LEFT, padx=(0, 5))
+            detail_var = StringVar()
+            detail_entry = Entry(detail_frame, textvariable=detail_var)
+            detail_entry.pack(side=LEFT, expand=True, fill=X)
+
+            # Кнопка "лупа" для поиска деталей
+            search_btn = Button(detail_frame, text="🔍", command=lambda: self.search_detail(detail_var))
+            search_btn.pack(side=LEFT, padx=(5, 0))
+
             Label(edit_window, text="Количество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
             quantity_entry = Entry(edit_window)
             quantity_entry.insert(0, str(invoice_data[6]))  # invoice_data[6] — это quantity
@@ -3577,8 +3667,6 @@ class WarehouseApp(WindowApp):
             except Exception as e:
                 self.conn.rollback()
                 messagebox.showerror("Ошибка", f"Не удалось удалить сотрудника: {str(e)}")
-
-
 
 WindowApp().auth_window()
         
