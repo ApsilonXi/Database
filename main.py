@@ -76,7 +76,6 @@ class WindowApp:
             else:
                 menu.add_separator()
         
-        # Добавляем пункт для принудительного обновления
         menu.add_separator()
         if tree == self.invoice_tree:
             menu.add_command(label="Обновить таблицу", command=lambda: [self.current_search_conditions.update({'invoice': None}), self.app.load_invoices()])
@@ -97,21 +96,17 @@ class WindowApp:
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Настройки")
         
-        # Основной фрейм для кнопок
         frame = Frame(tab)
         frame.pack(pady=20)
         
-        # Кнопка отката для всех пользователей
         btn_rollback = Button(frame, text="Откат системы к началу текущей сессии", 
                             command=self.rollback_to_initial_state)
         btn_rollback.pack(pady=10, fill=X)
         
-        # Новая кнопка для отмены последней операции
         btn_undo = Button(frame, text="Отменить последнюю операцию", 
                         command=self.undo_last_operation)
         btn_undo.pack(pady=10, fill=X)
         
-        # Дополнительные функции для владельца
         if self.current_user == 'owner':
             btn_backup = Button(frame, text="Резервное копирование", 
                             command=self.create_backup)
@@ -136,7 +131,6 @@ class WarehouseApp(WindowApp):
         self.is_search_active = False  
         self.sort_states = {}
         
-        # Добавляем атрибуты для хранения условий поиска
         self.current_search_conditions = {
             'invoice': None,
             'warehouse': None,
@@ -172,7 +166,6 @@ class WarehouseApp(WindowApp):
             self.status_bar = Label(root, text=f"Вход выполнен как: {login} | Готово", bd=1, relief=SUNKEN, anchor=W)
             self.status_bar.pack(side=BOTTOM, fill=X)
             
-            # Добавьте кнопку выхода в правую часть статус бара
             self.logout_btn = Button(self.status_bar, text="Выйти", command=self.logout)
             self.logout_btn.pack(side=RIGHT, padx=5)
             
@@ -201,15 +194,12 @@ class WarehouseApp(WindowApp):
     def logout(self):
         """Выход из системы и возврат к окну авторизации"""
         if messagebox.askyesno("Подтверждение", "Вы уверены, что хотите выйти из системы?"):
-            # Закрываем соединение с БД
             if hasattr(self, 'conn') and self.conn:
                 self.conn.close()
                 print("[INFO] PostgreSQL connection closed.")
             
-            # Закрываем главное окно
             self.root.destroy()
             
-            # Открываем окно авторизации
             self.auth_window()
 
     def on_close(self):
@@ -235,7 +225,6 @@ class WarehouseApp(WindowApp):
         search_window.title("Выбор детали")
         search_window.geometry("400x300")
         
-        # Поле поиска
         search_frame = Frame(search_window)
         search_frame.pack(fill=X, padx=5, pady=5)
         
@@ -247,21 +236,16 @@ class WarehouseApp(WindowApp):
                         command=lambda: self.perform_detail_search(detail_listbox, search_var.get()))
         search_btn.pack(side=LEFT)
         
-        # Список деталей
         detail_listbox = Listbox(search_window)
         detail_listbox.pack(fill=BOTH, expand=True, padx=5, pady=5)
         
-        # Кнопка выбора
         select_btn = Button(search_window, text="Выбрать",
                         command=lambda: self.select_detail(detail_listbox, detail_var, search_window))
         select_btn.pack(pady=5)
         
-        # Загружаем все детали при открытии
         self.perform_detail_search(detail_listbox, "")
         
-        # Поиск при нажатии Enter в поле поиска
         search_entry.bind("<Return>", lambda e: self.perform_detail_search(detail_listbox, search_var.get()))
-        # Выбор при двойном клике
         detail_listbox.bind("<Double-Button-1>", lambda e: self.select_detail(detail_listbox, detail_var, search_window))
 
     def perform_detail_search(self, listbox, search_text):
@@ -294,39 +278,29 @@ class WarehouseApp(WindowApp):
 
     def sort_treeview(self, tree, col, reverse, initial_order_col=None):
         """Сортировка Treeview по столбцу"""
-        # Получаем все элементы из Treeview
         data = [(tree.set(item, col), item) for item in tree.get_children('')]
         
-        # Определяем тип данных для сортировки
         try:
-            # Пробуем преобразовать в число
             data.sort(key=lambda x: float(x[0]), reverse=reverse)
         except ValueError:
-            # Если не число, сортируем как строку
             data.sort(key=lambda x: x[0].lower(), reverse=reverse)
         
-        # Перемещаем элементы в отсортированном порядке
         for index, (val, item) in enumerate(data):
             tree.move(item, '', index)
         
-        # Устанавливаем направление сортировки для следующего клика
         tree.heading(col, command=lambda: self.sort_treeview(tree, col, not reverse, initial_order_col))
         
-        # Если есть столбец для первоначального порядка (например, ID), добавляем кнопку сброса
         if initial_order_col:
             tree.heading(initial_order_col, 
                         command=lambda: self.reset_sort(tree, col))
         
-        # Добавляем стрелочку в заголовок для индикации направления сортировки
         tree.heading(col, text=col + (' ↓' if reverse else ' ↑'))
 
     def reset_sort(self, tree, sort_col):
         """Сброс сортировки к первоначальному состоянию"""
-        # Удаляем стрелочки из всех заголовков
         for col in tree['columns']:
             tree.heading(col, text=col)
         
-        # Сортируем по первоначальному столбцу (обычно ID)
         items = list(tree.get_children(''))
         try:
             items.sort(key=lambda x: int(tree.set(x, sort_col)))
@@ -336,19 +310,15 @@ class WarehouseApp(WindowApp):
         for index, item in enumerate(items):
             tree.move(item, '', index)
         
-        # Восстанавливаем команды для заголовков
         for col in tree['columns']:
             tree.heading(col, command=lambda c=col: self.sort_treeview(tree, c, False, sort_col))
 
     def reset_and_refresh(self, tree, sort_col, condition_key):
         """Сброс сортировки и обновление данных"""
-        # Сбрасываем условия поиска
         self.current_search_conditions.update({condition_key: None})
         
-        # Сбрасываем сортировку
         self.reset_sort(tree, sort_col)
         
-        # Загружаем данные заново
         if tree == self.invoice_tree:
             self.load_invoices()
         elif tree == self.warehouse_tree:
@@ -386,7 +356,6 @@ class WarehouseApp(WindowApp):
             elif table_name == 'employee' and hasattr(self, 'employee_tree'):
                 self.load_employees()
         else:
-            # Если поиск активен, не обновляем автоматически
             pass
 
     def refresh_all_tabs(self):
@@ -401,7 +370,6 @@ class WarehouseApp(WindowApp):
             if hasattr(self, 'employee_tree'):
                 self.load_employees()
         else:
-            # Если поиск активен, не обновляем автоматически
             pass
 
     def undo_last_operation(self):
@@ -411,7 +379,6 @@ class WarehouseApp(WindowApp):
                 messagebox.showinfo("Информация", "Не удалось определить начало сессии")
                 return
 
-            # Получаем ID последней операции UNDO (если есть)
             self.cursor.execute("""
                 SELECT record_id FROM log_table
                 WHERE action_type = 'UNDO'
@@ -422,7 +389,6 @@ class WarehouseApp(WindowApp):
             last_undo = self.cursor.fetchone()
             last_undo_id = last_undo[0] if last_undo else None
 
-            # Получаем последнюю операцию текущей сессии
             query = """
                 SELECT lt.log_id, lt.table_name, lt.action_type, 
                     lt.record_id, lt.old_values, lt.new_values
@@ -470,18 +436,15 @@ class WarehouseApp(WindowApp):
                 
             log_id, table, action, record_id, old_values, new_values = last_op
             
-            # Получаем первичный ключ для таблицы
             pk = self.get_primary_key(table)
             if not pk:
                 messagebox.showerror("Ошибка", f"Не удалось определить первичный ключ для таблицы {table}")
                 return
             
-            # Начинаем транзакцию
             self.cursor.execute("BEGIN")
             
             try:
                 if action == 'INSERT':
-                    # Для связанных таблиц сначала проверяем зависимости
                     if table in ['invoice_detail', 'invoice_employee']:
                         self.cursor.execute(f"""
                             SELECT invoiceid FROM {table} 
@@ -505,7 +468,6 @@ class WarehouseApp(WindowApp):
                     """, (record_id,))
                     
                 elif action == 'DELETE' and old_values:
-                    # Проверяем зависимости для вставки
                     if table in ['invoice_detail', 'invoice_employee'] and 'invoiceid' in old_values:
                         self.cursor.execute("""
                             SELECT 1 FROM invoice 
@@ -534,7 +496,6 @@ class WarehouseApp(WindowApp):
                         RETURNING *
                     """, list(old_values.values()) + [record_id])
                 
-                # Фиксируем отмену в логах
                 import json
                 old_values_json = json.dumps(new_values) if new_values else None
                 new_values_json = json.dumps(old_values) if old_values else None
@@ -575,7 +536,6 @@ class WarehouseApp(WindowApp):
         if messagebox.askyesno("Подтверждение", 
                             "Вы уверены, что хотите откатить все изменения текущей сессии?"):
             try:
-                # Получаем список изменений из логов, упорядоченный по таблицам
                 self.cursor.execute("""
                     SELECT table_name, action_type, record_id, old_values
                     FROM log_table
@@ -610,10 +570,8 @@ class WarehouseApp(WindowApp):
                     messagebox.showinfo("Информация", "Нет изменений для отката")
                     return
                 
-                # Начинаем транзакцию
                 self.cursor.execute("BEGIN")
                 
-                # Обрабатываем изменения в правильном порядке
                 for table, action, record_id, old_values in changes:
                     try:
                         pk = self.get_primary_key(table)
@@ -622,7 +580,6 @@ class WarehouseApp(WindowApp):
                             continue
                         
                         if action == 'INSERT':
-                            # Проверяем, существует ли запись перед удалением
                             self.cursor.execute(f"""
                                 SELECT 1 FROM {table} 
                                 WHERE {pk} = %s
@@ -634,9 +591,7 @@ class WarehouseApp(WindowApp):
                                 """, (record_id,))
                                 
                         elif action == 'DELETE' and old_values:
-                            # Проверяем зависимости для вставки
                             if table == 'invoice_detail' or table == 'invoice_employee':
-                                # Проверяем существование invoice
                                 if 'invoiceid' in old_values:
                                     self.cursor.execute("""
                                         SELECT 1 FROM invoice 
@@ -646,7 +601,6 @@ class WarehouseApp(WindowApp):
                                         print(f"[WARNING] Пропуск вставки в {table}, invoice не существует")
                                         continue
                             
-                            # Проверяем, не существует ли запись перед вставкой
                             self.cursor.execute(f"""
                                 SELECT 1 FROM {table} 
                                 WHERE {pk} = %s
@@ -660,7 +614,6 @@ class WarehouseApp(WindowApp):
                                 """, list(old_values.values()))
                                 
                         elif action == 'UPDATE' and old_values:
-                            # Всегда пытаемся выполнить UPDATE
                             set_clause = ', '.join([f"{k} = %s" for k in old_values.keys()])
                             self.cursor.execute(f"""
                                 UPDATE {table} 
@@ -670,12 +623,10 @@ class WarehouseApp(WindowApp):
                             
                     except psycopg2.Error as e:
                         print(f"[WARNING] Failed to revert {action} on {table}.{record_id}: {e}")
-                        # Продолжаем выполнение несмотря на ошибку
                         self.conn.rollback()
                         self.cursor.execute("SAVEPOINT rollback_continue")
                         continue
                 
-                # Помечаем откат в логах
                 self.cursor.execute("""
                     INSERT INTO log_table (table_name, action_type, record_id)
                     VALUES ('SYSTEM', 'ROLLBACK', %s)
@@ -683,7 +634,6 @@ class WarehouseApp(WindowApp):
                 
                 self.conn.commit()
                 
-                # Обновляем данные во всех вкладках
                 self.refresh_all_tabs()
                 
                 messagebox.showinfo("Успех", "Система успешно откачена к началу сессии")
@@ -694,7 +644,6 @@ class WarehouseApp(WindowApp):
 
     def get_primary_key(self, table_name):
         """Возвращает имя первичного ключа для таблицы с обработкой исключений"""
-        # Словарь соответствий имен таблиц и их первичных ключей
         pk_mapping = {
             'warehouse': 'warehouse_id',
             'room': 'room_id',
@@ -709,7 +658,6 @@ class WarehouseApp(WindowApp):
             'log_table': 'log_id'
         }
         
-        # Возвращаем PK из словаря или пытаемся определить автоматически
         if table_name in pk_mapping:
             return pk_mapping[table_name]
         
@@ -728,7 +676,6 @@ class WarehouseApp(WindowApp):
     def create_backup(self):
         """Создает резервную копию базы данных"""
         try:
-            # Запрашиваем место сохранения
             backup_file = filedialog.asksaveasfilename(
                 defaultextension=".backup",
                 filetypes=[("Backup files", "*.backup"), ("All files", "*.*")],
@@ -738,27 +685,23 @@ class WarehouseApp(WindowApp):
             if not backup_file:
                 return
                 
-            # Создаем переменные окружения с паролем
             env = os.environ.copy()
-            env['PGPASSWORD'] = '12345'  # Замените на ваш реальный пароль PostgreSQL
+            env['PGPASSWORD'] = '12345'  
             
-            # Выполняем pg_dump через subprocess
             command = [
                 r'C:\Program Files\PostgreSQL\17\bin\pg_dump',
                 '-h', '127.0.0.1',
                 '-U', 'postgres',
                 '-d', 'Warehouse_DB',
-                '-F', 'c',  # custom format
+                '-F', 'c',   
                 '-f', backup_file
             ]
             
-            # Запускаем процесс с переменными окружения
             process = subprocess.Popen(command, 
                                     env=env,
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE)
             
-            # Ждем завершения процесса
             stdout, stderr = process.communicate()
             
             if process.returncode == 0:
@@ -772,7 +715,6 @@ class WarehouseApp(WindowApp):
     def restore_from_backup(self):
         """Восстанавливает базу данных из резервной копии"""
         try:
-            # Запрашиваем файл резервной копии
             backup_file = filedialog.askopenfilename(
                 filetypes=[("Backup files", "*.backup"), ("All files", "*.*")],
                 title="Выберите файл резервной копии"
@@ -785,36 +727,30 @@ class WarehouseApp(WindowApp):
                                     "Вы уверены, что хотите восстановить базу данных из резервной копии? Все текущие данные будут потеряны!"):
                 return
                 
-            # Закрываем текущее соединение
             self.conn.close()
             
-            # Создаем переменные окружения с паролем
             env = os.environ.copy()
-            env['PGPASSWORD'] = '12345'  # Замените на ваш реальный пароль PostgreSQL
+            env['PGPASSWORD'] = '12345'  
             
-            # Выполняем pg_restore через subprocess
             command = [
                 r'C:\Program Files\PostgreSQL\17\bin\pg_restore',
                 '-h', '127.0.0.1',
                 '-U', 'postgres',
                 '-d', 'Warehouse_DB',
-                '-c',  # Очистить базу перед восстановлением
+                '-c',  
                 backup_file
             ]
             
-            # Запускаем процесс с переменными окружения
             process = subprocess.Popen(command, 
                                     env=env,
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE)
             
-            # Ждем завершения процесса
             stdout, stderr = process.communicate()
             
             if process.returncode == 0:
                 messagebox.showinfo("Успех", "База данных успешно восстановлена из резервной копии")
                 
-                # Перезапускаем приложение
                 self.root.destroy()
                 main_win = Tk()
                 app = WarehouseApp(main_win, self.current_user, self.user_password, None)
@@ -822,7 +758,6 @@ class WarehouseApp(WindowApp):
             else:
                 error_msg = stderr.decode('utf-8') if stderr else "Неизвестная ошибка"
                 messagebox.showerror("Ошибка", f"Не удалось восстановить базу данных: {error_msg}")
-                # Пытаемся восстановить соединение
                 self.conn = psycopg2.connect(
                     host="127.0.0.1",
                     user=self.current_user,
@@ -832,7 +767,6 @@ class WarehouseApp(WindowApp):
                 self.cursor = self.conn.cursor()
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при восстановлении из резервной копии: {str(e)}")
-            # Пытаемся восстановить соединение
             try:
                 self.conn = psycopg2.connect(
                     host="127.0.0.1",
@@ -846,7 +780,6 @@ class WarehouseApp(WindowApp):
 
     def create_structure_tab(self, parent, table_name, columns_ru):
         """Создает вкладку для редактирования структуры склада с русскими названиями"""
-        # Соответствие русских названий английским
         columns_map = {
             "warehouse": {
                 "Номер склада": "warehouse_number",
@@ -866,28 +799,23 @@ class WarehouseApp(WindowApp):
             }
         }
         
-        # Получаем английские названия колонок
         columns_en = [columns_map[table_name][col] for col in columns_ru]
         
-        # Treeview для отображения данных
         tree = ttk.Treeview(parent, columns=("id", *columns_ru), show="headings")
         tree.heading("id", text="ID")
         
-        # Настраиваем заголовки и колонки
         for col in columns_ru:
             tree.heading(col, text=col)
             tree.column(col, width=150)
         
         tree.column("id", width=50)
         
-        # Scrollbar
         scroll = ttk.Scrollbar(parent, command=tree.yview)
         scroll.pack(side=RIGHT, fill=Y)
         tree.configure(yscrollcommand=scroll.set)
         
         tree.pack(fill=BOTH, expand=True)
         
-        # Функция загрузки данных
         def load_data(reset_search=False):
             """Загружает данные с учетом текущих условий поиска или сбрасывает их"""
             if reset_search:
@@ -896,21 +824,17 @@ class WarehouseApp(WindowApp):
             tree.delete(*tree.get_children())
             
             if self.current_search_conditions.get(table_name):
-                # Загружаем с учетом текущего поиска
                 conditions = self.current_search_conditions[table_name]['conditions']
                 params = self.current_search_conditions[table_name]['params']
                 query = f"SELECT * FROM {table_name} WHERE " + " AND ".join(conditions) + " ORDER BY 1"
                 self.cursor.execute(query, params)
             else:
-                # Загружаем все данные
                 self.cursor.execute(f"SELECT * FROM {table_name} ORDER BY 1")
             
             for row in self.cursor.fetchall():
-                # Преобразуем ID в читаемые значения для внешних ключей
-                formatted_row = [row[0]]  # ID
+                formatted_row = [row[0]] 
                 for i, col in enumerate(columns_en):
                     if col.endswith("id"):
-                        # Для внешних ключей получаем связанные номера
                         ref_table = col.replace("id", "")
                         self.cursor.execute(f"SELECT {ref_table}_number FROM {ref_table} WHERE {ref_table}_id = %s", (row[i+1],))
                         ref_number = self.cursor.fetchone()
@@ -919,12 +843,10 @@ class WarehouseApp(WindowApp):
                         formatted_row.append(row[i+1])
                 tree.insert("", END, values=formatted_row)
         
-        # Функция поиска для конкретной вкладки
         def search_items():
             search_window = Toplevel(self.root)
             search_window.title(f"Поиск в {table_name}")
             
-            # Создаем элементы формы для поиска
             Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
             
             search_vars = []
@@ -932,7 +854,6 @@ class WarehouseApp(WindowApp):
                 Label(search_window, text=f"{col}:").grid(row=i+1, column=0, padx=5, pady=5, sticky=W)
                 var = StringVar()
                 
-                # Для внешних ключей делаем выпадающие списки
                 if columns_en[i].endswith("id"):
                     ref_table = columns_en[i].replace("id", "")
                     self.cursor.execute(f"SELECT {ref_table}_number FROM {ref_table} ORDER BY {ref_table}_number")
@@ -953,7 +874,6 @@ class WarehouseApp(WindowApp):
                         search_text = search_vars[i].get()
                         if search_text:
                             if col.endswith("id"):
-                                # Для внешних ключей ищем по номеру
                                 ref_table = col.replace("id", "")
                                 self.cursor.execute(f"""
                                     SELECT {ref_table}_id FROM {ref_table} 
@@ -964,17 +884,14 @@ class WarehouseApp(WindowApp):
                                     conditions.append(f"{col} = %s")
                                     params.append(ref_id[0])
                             else:
-                                # Для обычных полей используем LIKE
                                 conditions.append(f"{col}::text LIKE %s")
                                 params.append(f"%{search_text}%")
                     
-                    # Сохраняем условия поиска
                     self.current_search_conditions[table_name] = {
                         'conditions': conditions,
                         'params': params
                     }
                     
-                    # Обновляем данные с учетом поиска
                     load_data(False)
                     search_window.destroy()
                     
@@ -987,7 +904,6 @@ class WarehouseApp(WindowApp):
             Button(search_window, text="Сбросить", command=lambda: [self.current_search_conditions.update({table_name: None}), load_data(False), search_window.destroy()]).grid(
                 row=len(columns_ru)+1, column=1, padx=5, pady=10, sticky=EW)
         
-        # Контекстное меню
         menu = Menu(parent, tearoff=0)
         menu.add_command(label="Добавить", command=lambda: self.add_structure_item(table_name, columns_en, columns_ru, lambda: load_data(False)))
         menu.add_command(label="Изменить", command=lambda: self.edit_structure_item(tree, table_name, columns_en, columns_ru, lambda: load_data(False)))
@@ -995,8 +911,8 @@ class WarehouseApp(WindowApp):
         menu.add_separator()
         menu.add_command(label="Найти", command=search_items)  
         menu.add_separator()
-        menu.add_command(label="Обновить список", command=lambda: load_data(False))  # Обновит текущий список (после поиска)
-        menu.add_command(label="Обновить таблицу", command=lambda: load_data(True))  # Сбросит поиск и загрузит все данные
+        menu.add_command(label="Обновить список", command=lambda: load_data(False))   
+        menu.add_command(label="Обновить таблицу", command=lambda: load_data(True))  
         
         def show_context_menu(event):
             item = tree.identify_row(event.y)
@@ -1005,47 +921,37 @@ class WarehouseApp(WindowApp):
                 menu.post(event.x_root, event.y_root)
         
         tree.bind("<Button-3>", show_context_menu)
-        load_data(False)  # Первоначальная загрузка
+        load_data(False)   
 
     def edit_warehouse_structure(self):
         """Редактирование структуры склада (склады, комнаты, стеллажи, полки)"""
-        # Создаем новое окно для редактирования структуры
         edit_window = Toplevel(self.root)
         edit_window.title("Редактирование структуры склада")
         edit_window.geometry("800x600")
         
-        # Скрываем основное окно
         self.root.withdraw()
         
-        # Обработчик закрытия окна редактирования
         def on_edit_window_close():
-            # Показываем основное окно снова
             self.root.deiconify()
-            # Закрываем окно редактирования
             edit_window.destroy()
         
-        # Привязываем обработчик закрытия окна
         edit_window.protocol("WM_DELETE_WINDOW", on_edit_window_close)
         
         notebook = ttk.Notebook(edit_window)
         notebook.pack(fill=BOTH, expand=True)
         
-        # Вкладка для складов
         warehouse_tab = Frame(notebook)
         notebook.add(warehouse_tab, text="Склады")
         self.create_structure_tab(warehouse_tab, "warehouse", ["Номер склада", "Адрес"])
         
-        # Вкладка для комнат
         room_tab = Frame(notebook)
         notebook.add(room_tab, text="Комнаты")
         self.create_structure_tab(room_tab, "room", ["Склад", "Номер комнаты"])
         
-        # Вкладка для стеллажей
         rack_tab = Frame(notebook)
         notebook.add(rack_tab, text="Стеллажи")
         self.create_structure_tab(rack_tab, "rack", ["Комната", "Номер стеллажа"])
         
-        # Вкладка для полок
         shelf_tab = Frame(notebook)
         notebook.add(shelf_tab, text="Полки")
         self.create_structure_tab(shelf_tab, "shelf", ["Стеллаж", "Номер полки"])
@@ -1062,7 +968,7 @@ class WarehouseApp(WindowApp):
             labels.append(Label(add_window, text=col_ru))
             labels[-1].grid(row=i, column=0, padx=5, pady=5, sticky=W)
             
-            if col_en.endswith("id"):  # Это внешний ключ - делаем выпадающий список
+            if col_en.endswith("id"):  
                 ref_table = col_en.replace("id", "")
                 self.cursor.execute(f"SELECT {ref_table}_id, {ref_table}_number FROM {ref_table}")
                 options = [f"{num} (ID: {id})" for id, num in self.cursor.fetchall()]
@@ -1070,7 +976,7 @@ class WarehouseApp(WindowApp):
                 var = StringVar()
                 combo = ttk.Combobox(add_window, textvariable=var, values=options)
                 combo.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
-                entries.append((var, True, col_en))  # True означает, что это combobox
+                entries.append((var, True, col_en))  
             else:
                 entry = Entry(add_window)
                 entry.grid(row=i, column=1, padx=5, pady=5, sticky=EW)
@@ -1081,13 +987,10 @@ class WarehouseApp(WindowApp):
                 values = []
                 parent_id = None
                 
-                # Проверяем уникальность номера перед добавлением
                 if table_name == "warehouse":
-                    # Для склада проверяем уникальность номера склада
-                    warehouse_number = entries[0][0].get()  # Первое поле - номер склада
+                    warehouse_number = entries[0][0].get()   
                     self.cursor.execute("SELECT 1 FROM warehouse WHERE warehouse_number = %s", (warehouse_number,))
-                    # Для склада проверяем уникальность адреса
-                    address = entries[1][0].get()  # Второе поле - адрес
+                    address = entries[1][0].get()  
                     self.cursor.execute("SELECT 1 FROM warehouse WHERE address = %s", (address,))
                     if self.cursor.fetchone():
                         raise ValueError(f"Склад с номером {warehouse_number} уже существует")
@@ -1095,8 +998,7 @@ class WarehouseApp(WindowApp):
                         raise ValueError(f"Склад по адресу {address} уже существует")
                 
                 elif table_name == "room":
-                    # Для комнаты проверяем уникальность номера комнаты в пределах склада
-                    room_number = entries[1][0].get()  # Второе поле - номер комнаты
+                    room_number = entries[1][0].get()   
                     warehouse_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
                     self.cursor.execute("""
                         SELECT 1 FROM room 
@@ -1106,8 +1008,7 @@ class WarehouseApp(WindowApp):
                         raise ValueError(f"Комната с номером {room_number} уже существует в этом складе")
                 
                 elif table_name == "rack":
-                    # Для стеллажа проверяем уникальность номера стеллажа в пределах комнаты
-                    rack_number = entries[1][0].get()  # Второе поле - номер стеллажа
+                    rack_number = entries[1][0].get()   
                     room_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
                     self.cursor.execute("""
                         SELECT 1 FROM rack 
@@ -1117,8 +1018,7 @@ class WarehouseApp(WindowApp):
                         raise ValueError(f"Стеллаж с номером {rack_number} уже существует в этой комнате")
                 
                 elif table_name == "shelf":
-                    # Для полки проверяем уникальность номера полки в пределах стеллажа
-                    shelf_number = entries[1][0].get()  # Второе поле - номер полки
+                    shelf_number = entries[1][0].get()  
                     rack_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
                     self.cursor.execute("""
                         SELECT 1 FROM shelf 
@@ -1127,7 +1027,6 @@ class WarehouseApp(WindowApp):
                     if self.cursor.fetchone():
                         raise ValueError(f"Полка с номером {shelf_number} уже существует на этом стеллаже")
                 
-                # Если проверки пройдены, собираем значения
                 for entry, is_combo, col_en in entries:
                     if is_combo:
                         val = entry.get().split("(ID: ")[1].replace(")", "").strip()
@@ -1146,7 +1045,6 @@ class WarehouseApp(WindowApp):
                 self.conn.commit()
                 add_window.destroy()
                 messagebox.showinfo("Успех", "Запись успешно добавлена")
-                # УБИРАЕМ автоматический вызов callback()
             except ValueError as ve:
                 messagebox.showerror("Ошибка", str(ve))
             except Exception as e:
@@ -1169,7 +1067,6 @@ class WarehouseApp(WindowApp):
         edit_window = Toplevel(self.root)
         edit_window.title(f"Изменить запись в {table_name}")
         
-        # Получаем текущие данные
         self.cursor.execute(f"SELECT * FROM {table_name} WHERE {table_name}_id = %s", (item_id,))
         current_data = self.cursor.fetchone()
         
@@ -1180,12 +1077,11 @@ class WarehouseApp(WindowApp):
             labels.append(Label(edit_window, text=col_ru))
             labels[-1].grid(row=i, column=0, padx=5, pady=5, sticky=W)
             
-            if col_en.endswith("id"):  # Это внешний ключ - делаем выпадающий список
+            if col_en.endswith("id"):  
                 ref_table = col_en.replace("id", "")
                 self.cursor.execute(f"SELECT {ref_table}_id, {ref_table}_number FROM {ref_table}")
                 options = [f"{num} (ID: {id})" for id, num in self.cursor.fetchall()]
                 
-                # Находим текущее значение
                 self.cursor.execute(f"SELECT {ref_table}_number FROM {ref_table} WHERE {ref_table}_id = %s", (current_data[i+1],))
                 current_ref = self.cursor.fetchone()
                 current_value = f"{current_ref[0]} (ID: {current_data[i+1]})" if current_ref else ""
@@ -1202,15 +1098,12 @@ class WarehouseApp(WindowApp):
         
         def save_changes():
             try:
-                # Проверяем уникальность номера перед обновлением
                 if table_name == "warehouse":
-                    # Для склада проверяем уникальность адреса
                     new_address = entries[1][0].get()
                     self.cursor.execute("""
                         SELECT 1 FROM warehouse 
                         WHERE address = %s AND warehouse_id != %s
                     """, (new_address, item_id))
-                    # Для склада проверяем уникальность номера склада
                     warehouse_number = entries[0][0].get()
                     self.cursor.execute("""
                         SELECT 1 FROM warehouse 
@@ -1222,7 +1115,6 @@ class WarehouseApp(WindowApp):
                         raise ValueError(f"Склад с номером {warehouse_number} уже существует")
                 
                 elif table_name == "room":
-                    # Для комнаты проверяем уникальность номера комнаты в пределах склада
                     room_number = entries[1][0].get()
                     warehouse_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
                     self.cursor.execute("""
@@ -1233,7 +1125,6 @@ class WarehouseApp(WindowApp):
                         raise ValueError(f"Комната с номером {room_number} уже существует в этом складе")
                 
                 elif table_name == "rack":
-                    # Для стеллажа проверяем уникальность номера стеллажа в пределах комнаты
                     rack_number = entries[1][0].get()
                     room_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
                     self.cursor.execute("""
@@ -1244,7 +1135,6 @@ class WarehouseApp(WindowApp):
                         raise ValueError(f"Стеллаж с номером {rack_number} уже существует в этой комнате")
                 
                 elif table_name == "shelf":
-                    # Для полки проверяем уникальность номера полки в пределах стеллажа
                     shelf_number = entries[1][0].get()
                     rack_id = entries[0][0].get().split("(ID: ")[1].replace(")", "").strip()
                     self.cursor.execute("""
@@ -1254,7 +1144,6 @@ class WarehouseApp(WindowApp):
                     if self.cursor.fetchone():
                         raise ValueError(f"Полка с номером {shelf_number} уже существует на этом стеллаже")
                 
-                # Если проверки пройдены, собираем значения
                 values = []
                 for entry, is_combo, col_en in entries:
                     if is_combo:
@@ -1273,7 +1162,6 @@ class WarehouseApp(WindowApp):
                 self.conn.commit()
                 edit_window.destroy()
                 messagebox.showinfo("Успех", "Запись успешно обновлена")
-                # УБИРАЕМ автоматический вызов callback()
             except ValueError as ve:
                 messagebox.showerror("Ошибка", str(ve))
             except Exception as e:
@@ -1294,7 +1182,6 @@ class WarehouseApp(WindowApp):
         item_id = item['values'][0]
         
         try:
-            # Проверяем, есть ли связанные детали
             if table_name == "warehouse":
                 self.cursor.execute("""
                     SELECT 1 FROM details WHERE shelfID IN (
@@ -1333,10 +1220,8 @@ class WarehouseApp(WindowApp):
                 ):
                     return
             
-            # Выполняем удаление
             self.conn.commit()
             messagebox.showinfo("Успех", "Запись успешно удалена")
-            # УБИРАЕМ автоматический вызов callback()
         except psycopg2.Error as e:
             self.conn.rollback()
             error_msg = f"Ошибка удаления: {str(e)}"
@@ -1409,20 +1294,16 @@ class WarehouseApp(WindowApp):
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Накладные")
 
-        # Фрейм для кнопок
         button_frame = Frame(tab)
         button_frame.pack(fill=X, padx=5, pady=5)
         
-        # Кнопка поиска
         search_btn = Button(button_frame, text="Поиск", command=self.search_invoice)
         search_btn.pack(side=LEFT, padx=2)
         
-        # Кнопка обновления
         refresh_btn = Button(button_frame, text="Обновить", 
                     command=lambda: self.reset_and_refresh(self.invoice_tree, "ID", 'invoice'))
         refresh_btn.pack(side=LEFT, padx=2)
 
-        # Таблица накладных
         columns = ("ID", "Контрагент", "Дата", "Тип", "Статус", "Деталь", "Кол-во", "Ответственный")
         self.invoice_tree = ttk.Treeview(tab, columns=columns, show="headings")
         
@@ -1447,25 +1328,23 @@ class WarehouseApp(WindowApp):
         
         self.invoice_tree.pack(fill=BOTH, expand=True)
         
-        # Контекстное меню
         menu_items = []
         if self.can_edit_invoices:
             menu_items.extend([
                 ("Добавить накладную", self.add_invoice),
                 ("Изменить накладную", self.edit_invoice),
                 ("Удалить накладную", self.delete_invoice),
-                (None, None)  # разделитель
+                (None, None)  
             ])
         elif self.can_update_invoice_status:
             menu_items.extend([
                 ("Обновить статус", self.update_invoice_status),
-                (None, None)  # разделитель
+                (None, None)   
             ])
         
         self.invoice_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.invoice_tree, menu_items))
         self.invoice_tree.bind("<Delete>", lambda e: self.delete_invoice())
         
-        # Загрузка данных
         self.load_invoices()
     
     def update_invoice_status(self):
@@ -1495,9 +1374,7 @@ class WarehouseApp(WindowApp):
                 try:
                     new_status = status_var.get() == "Завершено"
                     
-                    # Если статус меняется на "В процессе", проверяем количество накладных у сотрудника
                     if not new_status:
-                        # Получаем ID ответственного
                         self.cursor.execute("""
                             SELECT responsible FROM invoice_employee 
                             WHERE invoiceid = %s
@@ -1506,7 +1383,6 @@ class WarehouseApp(WindowApp):
                         
                         if employee_id:
                             employee_id = employee_id[0]
-                            # Проверяем количество активных накладных
                             self.cursor.execute("""
                                 SELECT COUNT(*) FROM invoice_employee 
                                 WHERE responsible = %s 
@@ -1547,20 +1423,16 @@ class WarehouseApp(WindowApp):
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Склад")
 
-        # Фрейм для кнопок
         button_frame = Frame(tab)
         button_frame.pack(fill=X, padx=5, pady=5)
         
-        # Кнопка поиска
         search_btn = Button(button_frame, text="Поиск", command=self.search_warehouse_item)
         search_btn.pack(side=LEFT, padx=2)
         
-        # Кнопка обновления
         refresh_btn = Button(button_frame, text="Обновить", 
                     command=lambda: self.reset_and_refresh(self.warehouse_tree, "ID", 'warehouse'))
         refresh_btn.pack(side=LEFT, padx=2)
         
-        # Таблица склада
         columns = ("ID", "Склад", "Комната", "Стеллаж", "Полка", "Деталь", "Вес")
         self.warehouse_tree = ttk.Treeview(tab, columns=columns, show="headings")
         
@@ -1584,20 +1456,18 @@ class WarehouseApp(WindowApp):
         
         self.warehouse_tree.pack(fill=BOTH, expand=True)
         
-        # Контекстное меню (исправленная версия)
         menu_items = []
         if self.can_edit_warehouse:
             menu_items.extend([
                 ("Добавить деталь", self.add_warehouse_item),
                 ("Изменить деталь", self.edit_warehouse_item),
                 ("Удалить деталь", self.delete_warehouse_item),
-                (None, None)  # разделитель
+                (None, None)  
             ])
         
         self.warehouse_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.warehouse_tree, menu_items))
         self.warehouse_tree.bind("<Delete>", lambda e: self.delete_warehouse_item())
         
-        # Загрузка данных
         self.load_warehouse()
     
     def create_counteragent_tab(self):
@@ -1605,20 +1475,16 @@ class WarehouseApp(WindowApp):
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Контрагенты")
 
-        # Фрейм для кнопок
         button_frame = Frame(tab)
         button_frame.pack(fill=X, padx=5, pady=5)
         
-        # Кнопка поиска
         search_btn = Button(button_frame, text="Поиск", command=self.search_counteragent)
         search_btn.pack(side=LEFT, padx=2)
         
-        # Кнопка обновления
         refresh_btn = Button(button_frame, text="Обновить", 
                     command=lambda: self.reset_and_refresh(self.counteragent_tree, "ID", 'counteragent'))
         refresh_btn.pack(side=LEFT, padx=2)
         
-        # Таблица контрагентов
         columns = ("ID", "Название", "Контакт", "Телефон", "Адрес")
         self.counteragent_tree = ttk.Treeview(tab, columns=("ID", "Название", "Контакт", "Телефон", "Адрес"), show="headings")
 
@@ -1646,20 +1512,18 @@ class WarehouseApp(WindowApp):
         
         self.counteragent_tree.pack(fill=BOTH, expand=True)
         
-        # Контекстное меню
         menu_items = []
         if self.can_edit_counteragents:
             menu_items.extend([
                 ("Добавить контрагента", self.add_counteragent),
                 ("Изменить контрагента", self.edit_counteragent),
                 ("Удалить контрагента", self.delete_counteragent),
-                (None, None)  # разделитель
+                (None, None)  
             ])
         
         self.counteragent_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.counteragent_tree, menu_items))
         self.counteragent_tree.bind("<Delete>", lambda e: self.delete_counteragent())
         
-        # Загрузка данных
         self.load_counteragents()
     
     def create_employee_tab(self):
@@ -1667,20 +1531,16 @@ class WarehouseApp(WindowApp):
         tab = Frame(self.notebook)
         self.notebook.add(tab, text="Сотрудники")
 
-        # Фрейм для кнопок
         button_frame = Frame(tab)
         button_frame.pack(fill=X, padx=5, pady=5)
         
-        # Кнопка поиска
         search_btn = Button(button_frame, text="Поиск", command=self.search_employee)
         search_btn.pack(side=LEFT, padx=2)
         
-        # Кнопка обновления
         refresh_btn = Button(button_frame, text="Обновить", 
                     command=lambda: self.reset_and_refresh(self.employee_tree, "ID", 'employee'))
         refresh_btn.pack(side=LEFT, padx=2)
         
-        # Таблица сотрудников
         columns = ("ID", "Роль", "Фамилия", "Имя", "Отчество")
         self.employee_tree = ttk.Treeview(tab, columns=("ID", "Роль", "Фамилия", "Имя", "Отчество"), show="headings")
 
@@ -1709,29 +1569,25 @@ class WarehouseApp(WindowApp):
         
         self.employee_tree.pack(fill=BOTH, expand=True)
         
-        # Контекстное меню
         menu_items = []
         if self.can_edit_employees:
             menu_items.extend([
                 ("Добавить сотрудника", self.add_employee),
                 ("Изменить сотрудника", self.edit_employee),
                 ("Удалить сотрудника", self.delete_employee),
-                (None, None)  # разделитель
+                (None, None)
             ])
         self.employee_tree.bind("<Button-3>", lambda e: self.create_context_menu(e, self.employee_tree, menu_items))
         self.employee_tree.bind("<Delete>", lambda e: self.delete_employee())
     
-        # Загрузка данных
         self.load_employees()
     
-    # Методы загрузки данных
     def load_invoices(self):
         """Загрузка данных о накладных"""
         try:
             self.invoice_tree.delete(*self.invoice_tree.get_children())
             
             if self.current_search_conditions['invoice']:
-                # Если есть активный поиск, загружаем только найденные записи
                 conditions = self.current_search_conditions['invoice']['conditions']
                 params = self.current_search_conditions['invoice']['params']
                 query = """
@@ -1752,7 +1608,6 @@ class WarehouseApp(WindowApp):
                 """
                 self.cursor.execute(query, params)
             else:
-                # Иначе загружаем все данные
                 self.cursor.execute("""
                     SELECT 
                         invoice_id,
@@ -1787,16 +1642,13 @@ class WarehouseApp(WindowApp):
         search_window = Toplevel(self.root)
         search_window.title("Поиск накладных")
         
-        # Создаем элементы формы для поиска
         Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
         
-        # ID накладной
         Label(search_window, text="ID накладной:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
         id_var = StringVar()
         id_entry = Entry(search_window, textvariable=id_var)
         id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
         
-        # Контрагент
         Label(search_window, text="Контрагент:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
         counteragent_var = StringVar()
         counteragent_entry = Entry(search_window, textvariable=counteragent_var)
@@ -1807,27 +1659,23 @@ class WarehouseApp(WindowApp):
         date_from_entry = Entry(search_window, textvariable=date_from_var)
         date_from_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
         
-        # Тип накладной
         Label(search_window, text="Тип накладной:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
         type_var = StringVar()
         type_combobox = ttk.Combobox(search_window, textvariable=type_var, 
                                     values=["", "Отгрузка", "Выгрузка"])
         type_combobox.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
         
-        # Статус
         Label(search_window, text="Статус:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
         status_var = StringVar()
         status_combobox = ttk.Combobox(search_window, textvariable=status_var, 
                                     values=["", "В процессе", "Завершено"])
         status_combobox.grid(row=6, column=1, padx=5, pady=5, sticky=EW)
         
-        # Деталь
         Label(search_window, text="Деталь:").grid(row=7, column=0, padx=5, pady=5, sticky=W)
         detail_var = StringVar()
         detail_entry = Entry(search_window, textvariable=detail_var)
         detail_entry.grid(row=7, column=1, padx=5, pady=5, sticky=EW)
         
-        # Ответственный
         Label(search_window, text="Ответственный:").grid(row=8, column=0, padx=5, pady=5, sticky=W)
         responsible_var = StringVar()
         responsible_entry = Entry(search_window, textvariable=responsible_var)
@@ -1874,13 +1722,11 @@ class WarehouseApp(WindowApp):
                         f"%{responsible_var.get()}%"
                     ])
                 
-                # Сохраняем условия поиска
                 self.current_search_conditions['invoice'] = {
                     'conditions': conditions,
                     'params': params
                 }
                 
-                # Выполняем поиск и обновляем таблицу
                 self.load_invoices()
                 search_window.destroy()
                 
@@ -1954,40 +1800,33 @@ class WarehouseApp(WindowApp):
         search_window = Toplevel(self.root)
         search_window.title("Поиск деталей на складе")
         
-        # Создаем элементы формы для поиска
         Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
         
-        # Тип детали
         Label(search_window, text="Тип детали:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
         type_var = StringVar()
         type_entry = Entry(search_window, textvariable=type_var)
         type_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
         
-        # Номер склада
         Label(search_window, text="Номер склада:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
         warehouse_var = StringVar()
         warehouse_entry = Entry(search_window, textvariable=warehouse_var)
         warehouse_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
         
-        # Номер комнаты
         Label(search_window, text="Номер комнаты:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
         room_var = StringVar()
         room_entry = Entry(search_window, textvariable=room_var)
         room_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
         
-        # Номер стеллажа
         Label(search_window, text="Номер стеллажа:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
         rack_var = StringVar()
         rack_entry = Entry(search_window, textvariable=rack_var)
         rack_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
         
-        # Номер полки
         Label(search_window, text="Номер полки:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
         shelf_var = StringVar()
         shelf_entry = Entry(search_window, textvariable=shelf_var)
         shelf_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
         
-        # Вес (от и до)
         Label(search_window, text="Вес от:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
         weight_from_var = StringVar()
         weight_from_entry = Entry(search_window, textvariable=weight_from_var)
@@ -2039,13 +1878,11 @@ class WarehouseApp(WindowApp):
                     except ValueError:
                         messagebox.showwarning("Предупреждение", "Некорректное значение веса 'до'")
                 
-                # Сохраняем условия поиска
                 self.current_search_conditions['warehouse'] = {
                     'conditions': conditions,
                     'params': params
                 }
                 
-                # Выполняем поиск и обновляем таблицу
                 self.load_warehouse()
                 search_window.destroy()
                 
@@ -2093,34 +1930,28 @@ class WarehouseApp(WindowApp):
         search_window = Toplevel(self.root)
         search_window.title("Поиск контрагентов")
         
-        # Создаем элементы формы для поиска
         Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
         
-        # ID контрагента
         Label(search_window, text="ID контрагента:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
         id_var = StringVar()
         id_entry = Entry(search_window, textvariable=id_var)
         id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
         
-        # Название контрагента
         Label(search_window, text="Название:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
         name_var = StringVar()
         name_entry = Entry(search_window, textvariable=name_var)
         name_entry.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
         
-        # Контактное лицо
         Label(search_window, text="Контактное лицо:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
         contact_var = StringVar()
         contact_entry = Entry(search_window, textvariable=contact_var)
         contact_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
         
-        # Телефон
         Label(search_window, text="Телефон:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
         phone_var = StringVar()
         phone_entry = Entry(search_window, textvariable=phone_var)
         phone_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
         
-        # Адрес
         Label(search_window, text="Адрес:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
         address_var = StringVar()
         address_entry = Entry(search_window, textvariable=address_var)
@@ -2151,13 +1982,11 @@ class WarehouseApp(WindowApp):
                     conditions.append("address ILIKE %s")
                     params.append(f"%{address_var.get()}%")
                 
-                # Сохраняем условия поиска
                 self.current_search_conditions['counteragent'] = {
                     'conditions': conditions,
                     'params': params
                 }
                 
-                # Выполняем поиск и обновляем таблицу
                 self.load_counteragents()
                 search_window.destroy()
                 
@@ -2206,35 +2035,29 @@ class WarehouseApp(WindowApp):
         search_window = Toplevel(self.root)
         search_window.title("Поиск сотрудников")
         
-        # Создаем элементы формы для поиска
         Label(search_window, text="Критерии поиска:").grid(row=0, column=0, columnspan=2, pady=5)
         
-        # ID сотрудника
         Label(search_window, text="ID сотрудника:").grid(row=1, column=0, padx=5, pady=5, sticky=W)
         id_var = StringVar()
         id_entry = Entry(search_window, textvariable=id_var)
         id_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
         
-        # Роль
         Label(search_window, text="Роль:").grid(row=2, column=0, padx=5, pady=5, sticky=W)
         role_var = StringVar()
         role_combobox = ttk.Combobox(search_window, textvariable=role_var, 
                                     values=["", "Кладовщик", "Менеджер склада", "Владелец"])
         role_combobox.grid(row=2, column=1, padx=5, pady=5, sticky=EW)
         
-        # Фамилия
         Label(search_window, text="Фамилия:").grid(row=3, column=0, padx=5, pady=5, sticky=W)
         last_name_var = StringVar()
         last_name_entry = Entry(search_window, textvariable=last_name_var)
         last_name_entry.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
         
-        # Имя
         Label(search_window, text="Имя:").grid(row=4, column=0, padx=5, pady=5, sticky=W)
         first_name_var = StringVar()
         first_name_entry = Entry(search_window, textvariable=first_name_var)
         first_name_entry.grid(row=4, column=1, padx=5, pady=5, sticky=EW)
         
-        # Отчество
         Label(search_window, text="Отчество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
         patronymic_var = StringVar()
         patronymic_entry = Entry(search_window, textvariable=patronymic_var)
@@ -2265,13 +2088,11 @@ class WarehouseApp(WindowApp):
                     conditions.append("patronymic ILIKE %s")
                     params.append(f"%{patronymic_var.get()}%")
                 
-                # Сохраняем условия поиска
                 self.current_search_conditions['employee'] = {
                     'conditions': conditions,
                     'params': params
                 }
                 
-                # Выполняем поиск и обновляем таблицу
                 self.load_employees()
                 search_window.destroy()
                 
@@ -2291,7 +2112,6 @@ class WarehouseApp(WindowApp):
         Button(search_window, text="Сбросить", command=reset_search).grid(
             row=6, column=1, padx=5, pady=10, sticky=EW)
     
-    # Методы для работы с накладными
     def add_invoice(self):
         """Добавление новой накладной с проверкой прав"""
         if not self.can_edit_invoices:
@@ -2302,7 +2122,6 @@ class WarehouseApp(WindowApp):
             add_window = Toplevel(self.root)
             add_window.title("Добавить накладную")
             
-            # Получаем список контрагентов (если есть доступ)
             if self.can_access_counteragents:
                 self.cursor.execute("SELECT counteragent_id, counteragent_name FROM counteragent")
                 counteragents = self.cursor.fetchall()
@@ -2314,7 +2133,6 @@ class WarehouseApp(WindowApp):
                 counteragent_ids = {}
                 messagebox.showwarning("Предупреждение", "Нет доступа к списку контрагентов")
             
-            # Получаем список ответственных ИЗ ПРЕДСТАВЛЕНИЯ (без доступа к таблице employee)
             self.cursor.execute("""
                 SELECT DISTINCT 
                     responsible_id,
@@ -2328,7 +2146,6 @@ class WarehouseApp(WindowApp):
             employee_names = [name for id, name in employees]
             employee_ids = {name: id for id, name in employees}
             
-            # Создаем элементы формы
             Label(add_window, text="Контрагент:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
             counteragent_var = StringVar()
             counteragent_combobox = ttk.Combobox(add_window, textvariable=counteragent_var, values=counteragent_names)
@@ -2336,7 +2153,6 @@ class WarehouseApp(WindowApp):
             
             Label(add_window, text="Дата и время (ГГГГ-ММ-ДД ЧЧ:ММ):").grid(row=1, column=0, padx=5, pady=5, sticky=W)
             date_entry = Entry(add_window)
-            # Устанавливаем текущую дату и время по умолчанию
             current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M")
             date_entry.insert(0, current_datetime)
             date_entry.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
@@ -2353,8 +2169,7 @@ class WarehouseApp(WindowApp):
             status_combobox.current(0)
             status_combobox.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
             
-            # Изменено: поле ввода вместо выпадающего списка
-            detail_frame = Frame(add_window)  # или edit_window для edit_invoice
+            detail_frame = Frame(add_window)  
             detail_frame.grid(row=4, column=0, columnspan=2, padx=5, pady=5, sticky=EW)
 
             Label(detail_frame, text="Деталь:").pack(side=LEFT, padx=(0, 5))
@@ -2362,7 +2177,6 @@ class WarehouseApp(WindowApp):
             detail_entry = Entry(detail_frame, textvariable=detail_var)
             detail_entry.pack(side=LEFT, expand=True, fill=X)
 
-            # Кнопка "лупа" для поиска деталей
             search_btn = Button(detail_frame, text="🔍", command=lambda: self.search_detail(detail_var))
             search_btn.pack(side=LEFT, padx=(5, 0))
             
@@ -2377,7 +2191,6 @@ class WarehouseApp(WindowApp):
             
             def save_invoice():
                 try:
-                    # Проверяем дату
                     input_datetime_str = date_entry.get()
                     try:
                         input_datetime = datetime.strptime(input_datetime_str, "%Y-%m-%d %H:%M")
@@ -2388,11 +2201,9 @@ class WarehouseApp(WindowApp):
                     if input_datetime > current_datetime:
                         raise ValueError("Дата накладной не может быть в будущем. Укажите текущую или прошедшую дату.")
                     
-                    # Получаем ID из выбранных значений через словари
                     counteragent_id = counteragent_ids.get(counteragent_var.get())
                     employee_id = employee_ids.get(employee_var.get())
 
-                    # Проверка количества накладных у сотрудника (новый код)
                     if employee_id:
                         self.cursor.execute("""
                             SELECT COUNT(*) FROM invoice_employee 
@@ -2408,12 +2219,10 @@ class WarehouseApp(WindowApp):
                     if None in (counteragent_id, employee_id):
                         raise ValueError("Не все обязательные поля заполнены")
                     
-                    # Проверяем существование детали
                     detail_name = detail_var.get().strip()
                     if not detail_name:
                         raise ValueError("Название детали не может быть пустым")
                     
-                    # Получаем ID и тип детали
                     self.cursor.execute("""
                         SELECT detail_id FROM details 
                         WHERE type_detail = %s
@@ -2426,11 +2235,9 @@ class WarehouseApp(WindowApp):
                     
                     detail_id = detail_data[0]
                     
-                    # Преобразуем тип и статус
-                    type_invoice = type_var.get() == "Выгрузка"  # True - выгрузка, False - отгрузка
+                    type_invoice = type_var.get() == "Выгрузка"   
                     status = status_var.get() == "Завершено"
                     
-                    # Получаем количество
                     try:
                         quantity = int(quantity_entry.get())
                         if quantity <= 0:
@@ -2438,9 +2245,7 @@ class WarehouseApp(WindowApp):
                     except ValueError:
                         raise ValueError("Количество должно быть целым числом")
                     
-                    # Проверка доступности деталей
-                    if not type_invoice:  # Только для отгрузки (не для выгрузки)
-                        # 1. Получаем общее количество деталей этого типа на складе
+                    if not type_invoice: 
                         self.cursor.execute("""
                             SELECT COUNT(*) 
                             FROM details 
@@ -2448,7 +2253,6 @@ class WarehouseApp(WindowApp):
                         """, (detail_name,))
                         total_available = self.cursor.fetchone()[0]
                         
-                        # 2. Получаем сумму всех запланированных к отгрузке деталей ЭТОГО ТИПА
                         self.cursor.execute("""
                             SELECT COALESCE(SUM(id.quantity), 0)
                             FROM invoice_detail id
@@ -2458,15 +2262,12 @@ class WarehouseApp(WindowApp):
                         """, (detail_name,))
                         reserved = self.cursor.fetchone()[0]
                         
-                        # 3. Проверяем доступность
                         if total_available < (reserved + quantity):
                             raise ValueError(
                                 f"Недостаточно деталей на складе для отгрузки. Доступно: {total_available}, "
                                 f"уже зарезервировано для отгрузки: {reserved}, требуется: {quantity}"
                             )
-                    # ===== КОНЕЦ НОВОГО КОДА =====
                     
-                    # Вставляем накладную
                     self.cursor.execute("""
                         INSERT INTO invoice (counteragentid, date_time, type_invoice, status)
                         VALUES (%s, %s, %s, %s)
@@ -2475,13 +2276,11 @@ class WarehouseApp(WindowApp):
                     
                     invoice_id = self.cursor.fetchone()[0]
                     
-                    # Добавляем деталь в накладную
                     self.cursor.execute("""
                         INSERT INTO invoice_detail (invoiceid, detailid, quantity)
                         VALUES (%s, %s, %s)
                     """, (invoice_id, detail_id, quantity))
                     
-                    # Назначаем ответственного
                     self.cursor.execute("""
                         INSERT INTO invoice_employee (invoiceid, responsible, granted_access, when_granted)
                         VALUES (%s, %s, %s, NOW())
@@ -2517,7 +2316,6 @@ class WarehouseApp(WindowApp):
         invoice_id = item['values'][0]
         
         try:
-            # Получаем данные о накладной
             self.cursor.execute("""
                 SELECT 
                     invoice_id,
@@ -2543,7 +2341,6 @@ class WarehouseApp(WindowApp):
             edit_window = Toplevel(self.root)
             edit_window.title("Редактировать накладную")
             
-            # Получаем списки для выпадающих списков
             self.cursor.execute("SELECT counteragent_id, counteragent_name FROM counteragent")
             counteragents = self.cursor.fetchall()
             counteragent_names = [name for id, name in counteragents]
@@ -2562,16 +2359,14 @@ class WarehouseApp(WindowApp):
             employee_names = [name for id, name in employees]
             employee_ids = {name: id for id, name in employees}
             
-            # Создаем элементы формы с текущими значениями
             Label(edit_window, text="Контрагент:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
             counteragent_var = StringVar()
             counteragent_combobox = ttk.Combobox(edit_window, textvariable=counteragent_var, 
                                             values=counteragent_names)
             counteragent_combobox.grid(row=0, column=1, padx=5, pady=5, sticky=EW)
             
-            # Устанавливаем текущее значение контрагента
             for id, name in counteragents:
-                if name == invoice_data[1]:  # invoice_data[1] — это counteragent_name
+                if name == invoice_data[1]:   
                     counteragent_var.set(invoice_data[1])
                     break
             
@@ -2594,8 +2389,7 @@ class WarehouseApp(WindowApp):
             status_combobox.current(1 if invoice_data[4] == "Завершено" else 0)
             status_combobox.grid(row=3, column=1, padx=5, pady=5, sticky=EW)
             
-            # Заменяем Combobox на Entry для типа детали
-            detail_frame = Frame(edit_window)  # или edit_window для edit_invoice
+            detail_frame = Frame(edit_window)  
             detail_frame.grid(row=4, column=0, columnspan=2, padx=5, pady=5, sticky=EW)
 
             Label(detail_frame, text="Деталь:").pack(side=LEFT, padx=(0, 5))
@@ -2603,13 +2397,12 @@ class WarehouseApp(WindowApp):
             detail_entry = Entry(detail_frame, textvariable=detail_var)
             detail_entry.pack(side=LEFT, expand=True, fill=X)
 
-            # Кнопка "лупа" для поиска деталей
             search_btn = Button(detail_frame, text="🔍", command=lambda: self.search_detail(detail_var))
             search_btn.pack(side=LEFT, padx=(5, 0))
 
             Label(edit_window, text="Количество:").grid(row=5, column=0, padx=5, pady=5, sticky=W)
             quantity_entry = Entry(edit_window)
-            quantity_entry.insert(0, str(invoice_data[6]))  # invoice_data[6] — это quantity
+            quantity_entry.insert(0, str(invoice_data[6]))   
             quantity_entry.grid(row=5, column=1, padx=5, pady=5, sticky=EW)
             
             Label(edit_window, text="Ответственный:").grid(row=6, column=0, padx=5, pady=5, sticky=W)
@@ -2618,15 +2411,13 @@ class WarehouseApp(WindowApp):
                                             values=employee_names)
             employee_combobox.grid(row=6, column=1, padx=5, pady=5, sticky=EW)
             
-            # Устанавливаем текущее значение сотрудника
             for id, name in employees:
-                if name == invoice_data[7]:  # invoice_data[7] — это ответственный
+                if name == invoice_data[7]:  
                     employee_var.set(name)
                     break
             
             def save_changes():
                 try:
-                    # Проверяем, что тип детали существует в БД
                     detail_name = detail_var.get().strip()
                     if not detail_name:
                         raise ValueError("Тип детали не может быть пустым")
@@ -2643,7 +2434,6 @@ class WarehouseApp(WindowApp):
                     
                     detail_id = detail_data[0]
                     
-                    # Проверяем количество (должно быть > 0)
                     try:
                         quantity = int(quantity_entry.get())
                         if quantity <= 0:
@@ -2651,21 +2441,18 @@ class WarehouseApp(WindowApp):
                     except ValueError:
                         raise ValueError("Количество должно быть целым числом!")
                     
-                    # Получаем ID контрагента из словаря
                     counteragent_name = counteragent_var.get()
                     counteragent_id = counteragent_ids.get(counteragent_name)
                     
                     if counteragent_id is None:
                         raise ValueError("Выберите корректного контрагента")
                     
-                    # Получаем ID сотрудника из словаря
                     employee_name = employee_var.get()
                     employee_id = employee_ids.get(employee_name)
                     
                     if employee_id is None:
                         raise ValueError("Выберите корректного сотрудника")
                     
-                    # Проверка количества накладных у сотрудника
                     if employee_id:
                         self.cursor.execute("""
                             SELECT COUNT(*) FROM invoice_employee 
@@ -2678,13 +2465,10 @@ class WarehouseApp(WindowApp):
                         if active_invoices_count >= 5:
                             raise ValueError(f"У сотрудника уже {active_invoices_count} активных накладных. Максимум - 5.")
                     
-                    # Преобразуем тип и статус
                     type_invoice = type_var.get() == "Выгрузка"
                     status = status_var.get() == "Завершено"
                     
-                    # Проверка доступности деталей
-                    if not type_invoice:  # Если это отгрузка
-                        # 1. Получаем текущее количество в этой накладной (если было)
+                    if not type_invoice:  
                         self.cursor.execute("""
                             SELECT quantity FROM invoice_detail 
                             WHERE invoiceid = %s
@@ -2692,7 +2476,6 @@ class WarehouseApp(WindowApp):
                         old_quantity_row = self.cursor.fetchone()
                         old_quantity = old_quantity_row[0] if old_quantity_row else 0
                         
-                        # 2. Получаем ФАКТИЧЕСКОЕ количество деталей этого типа на складе
                         self.cursor.execute("""
                             SELECT COUNT(*) 
                             FROM details d
@@ -2707,7 +2490,6 @@ class WarehouseApp(WindowApp):
                         """, (detail_name,))
                         total_available = self.cursor.fetchone()[0]
                         
-                        # 3. Получаем сумму всех НЕЗАВЕРШЁННЫХ отгрузок этого типа
                         self.cursor.execute("""
                             SELECT COALESCE(SUM(id.quantity), 0)
                             FROM invoice_detail id
@@ -2720,7 +2502,6 @@ class WarehouseApp(WindowApp):
                         """, (detail_name, invoice_id))
                         reserved = self.cursor.fetchone()[0]
                         
-                        # 4. Проверяем доступность с учётом изменений
                         if total_available < (reserved + quantity - old_quantity):
                             raise ValueError(
                                 f"Недостаточно деталей на складе для отгрузки. "
@@ -2729,21 +2510,18 @@ class WarehouseApp(WindowApp):
                                 f"новое количество: {quantity} (было: {old_quantity})"
                             )
                     
-                    # Обновляем накладную
                     self.cursor.execute("""
                         UPDATE invoice 
                         SET counteragentid = %s, date_time = %s, type_invoice = %s, status = %s
                         WHERE invoice_id = %s
                     """, (counteragent_id, date_entry.get(), type_invoice, status, invoice_id))
                     
-                    # Обновляем деталь в накладной
                     self.cursor.execute("""
                         UPDATE invoice_detail 
                         SET detailid = %s, quantity = %s
                         WHERE invoiceid = %s
                     """, (detail_id, quantity, invoice_id))
                     
-                    # Обновляем ответственного
                     self.cursor.execute("""
                         UPDATE invoice_employee 
                         SET responsible = %s
@@ -2777,19 +2555,15 @@ class WarehouseApp(WindowApp):
         
         if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите удалить накладную №{invoice_id}?"):
             try:
-                # 1. Удаляем записи из invoice_detail (связанные детали)
                 self.cursor.execute("DELETE FROM invoice_detail WHERE invoiceid = %s", (invoice_id,))
                 
-                # 2. Удаляем записи из invoice_employee (связанных сотрудников)
                 self.cursor.execute("DELETE FROM invoice_employee WHERE invoiceid = %s", (invoice_id,))
                 
-                # 3. Теперь удаляем саму накладную
                 self.cursor.execute("DELETE FROM invoice WHERE invoice_id = %s", (invoice_id,))
                 
                 self.conn.commit()
                 self.load_invoices()
                 
-                # Проверяем, стала ли таблица пустой после удаления
                 if len(self.invoice_tree.get_children()) == 0 and self.current_search_conditions['invoice']:
                     messagebox.showinfo("Информация", "Таблица пуста. Сброс условий поиска.")
                     self.current_search_conditions['invoice'] = None
@@ -2800,7 +2574,6 @@ class WarehouseApp(WindowApp):
                 self.conn.rollback()
                 messagebox.showerror("Ошибка", f"Не удалось удалить накладную: {str(e)}")
     
-    # Методы для работы со складом
     def add_warehouse_item(self):
         """Добавление детали на склад с динамическими выпадающими списками"""
         if not self.can_edit_warehouse:
@@ -2811,16 +2584,13 @@ class WarehouseApp(WindowApp):
             add_window = Toplevel(self.root)
             add_window.title("Добавить деталь на склад")
             
-            # Получаем список складов
             self.cursor.execute("SELECT warehouse_id, warehouse_number FROM warehouse ORDER BY warehouse_number")
             warehouses = self.cursor.fetchall()
             warehouse_options = [str(number) for id, number in warehouses]
             warehouse_ids = {str(number): id for id, number in warehouses}
 
-            # Создаем элементы формы
             row = 0
             
-            # Склад (выпадающий список)
             Label(add_window, text="Номер склада:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             warehouse_var = StringVar()
             warehouse_combobox = ttk.Combobox(add_window, textvariable=warehouse_var, 
@@ -2828,7 +2598,6 @@ class WarehouseApp(WindowApp):
             warehouse_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
 
-            # Комната (выпадающий список)
             Label(add_window, text="Номер комнаты:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             room_var = StringVar()
             room_combobox = ttk.Combobox(add_window, textvariable=room_var, 
@@ -2836,7 +2605,6 @@ class WarehouseApp(WindowApp):
             room_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
 
-            # Стеллаж (выпадающий список)
             Label(add_window, text="Номер стеллажа:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             rack_var = StringVar()
             rack_combobox = ttk.Combobox(add_window, textvariable=rack_var, 
@@ -2844,7 +2612,6 @@ class WarehouseApp(WindowApp):
             rack_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
 
-            # Полка (выпадающий список)
             Label(add_window, text="Номер полки:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             shelf_var = StringVar()
             shelf_combobox = ttk.Combobox(add_window, textvariable=shelf_var, 
@@ -2852,20 +2619,17 @@ class WarehouseApp(WindowApp):
             shelf_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
 
-            # Тип детали (поле ввода)
             Label(add_window, text="Тип детали:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             type_entry = Entry(add_window)
             type_entry.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
 
-            # Вес (поле ввода)
             Label(add_window, text="Вес (кг):").grid(row=row, column=0, padx=5, pady=5, sticky=W)
             weight_entry = Entry(add_window)
             weight_entry.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             weight_entry.insert(0, "0.0")
             row += 1
 
-            # Функция для обновления списка комнат при изменении склада
             def update_rooms(event=None):
                 selected_warehouse = warehouse_var.get()
                 if selected_warehouse in warehouse_ids:
@@ -2898,7 +2662,6 @@ class WarehouseApp(WindowApp):
                     rack_combobox['values'] = []
                     shelf_combobox['values'] = []
 
-            # Функция для обновления списка стеллажей при изменении комнаты
             def update_racks(event=None):
                 selected_warehouse = warehouse_var.get()
                 selected_room = room_var.get()
@@ -2932,7 +2695,6 @@ class WarehouseApp(WindowApp):
                     rack_combobox['values'] = []
                     shelf_combobox['values'] = []
 
-            # Функция для обновления списка полок при изменении стеллажа
             def update_shelves(event=None):
                 selected_warehouse = warehouse_var.get()
                 selected_room = room_var.get()
@@ -2966,12 +2728,10 @@ class WarehouseApp(WindowApp):
                 else:
                     shelf_combobox['values'] = []
 
-            # Привязываем обработчики изменений
             warehouse_combobox.bind("<<ComboboxSelected>>", update_rooms)
             room_combobox.bind("<<ComboboxSelected>>", update_racks)
             rack_combobox.bind("<<ComboboxSelected>>", update_shelves)
 
-            # Устанавливаем первый склад по умолчанию, если есть
             if warehouse_options:
                 warehouse_combobox.current(0)
                 warehouse_var.set(warehouse_options[0])
@@ -2979,13 +2739,11 @@ class WarehouseApp(WindowApp):
 
             def save_item():
                 try:
-                    # Проверяем, что все поля заполнены
                     if not all([warehouse_var.get(), room_var.get(), 
                             rack_var.get(), shelf_var.get(), 
                             type_entry.get(), weight_entry.get()]):
                         raise ValueError("Все поля должны быть заполнены")
 
-                    # Получаем ID полки
                     self.cursor.execute("""
                         SELECT shelf_id FROM shelf 
                         WHERE shelf_number = %s AND rackID = (
@@ -3005,7 +2763,6 @@ class WarehouseApp(WindowApp):
                         raise ValueError("Полка не найдена в базе данных")
                     shelf_id = shelf_data[0]
 
-                    # Проверяем вес
                     try:
                         weight = float(weight_entry.get())
                         if weight <= 0.0:
@@ -3013,7 +2770,6 @@ class WarehouseApp(WindowApp):
                     except ValueError as e:
                         raise ValueError("Вес должен быть числом (например, 2.1)")
                     
-                    # Проверка количества деталей на полке
                     self.cursor.execute("""
                         SELECT COUNT(*) FROM details WHERE shelfid = %s
                     """, (shelf_id,))
@@ -3022,7 +2778,6 @@ class WarehouseApp(WindowApp):
                     if details_count >= 5:
                         raise ValueError(f"На полке уже {details_count} деталей. Максимум - 5.")
 
-                    # Вставляем деталь
                     self.cursor.execute("""
                         INSERT INTO details (shelfid, type_detail, weight)
                         VALUES (%s, %s, %s)
@@ -3038,7 +2793,6 @@ class WarehouseApp(WindowApp):
                     self.conn.rollback()
                     messagebox.showerror("Ошибка", f"Не удалось добавить деталь: {str(e)}")
             
-            # Кнопка сохранения
             Button(add_window, text="Сохранить", command=save_item).grid(
                 row=row, column=0, columnspan=2, pady=10)
                 
@@ -3060,7 +2814,6 @@ class WarehouseApp(WindowApp):
         detail_id = item['values'][0]
         
         try:
-            # Получаем текущие данные о детали
             self.cursor.execute("""
                 SELECT 
                     d.detail_id, d.type_detail, d.weight,
@@ -3085,62 +2838,53 @@ class WarehouseApp(WindowApp):
             edit_window = Toplevel(self.root)
             edit_window.title("Редактировать деталь")
             
-            # Получаем списки для выпадающих списков
             self.cursor.execute("SELECT warehouse_id, warehouse_number FROM warehouse ORDER BY warehouse_number")
             warehouses = self.cursor.fetchall()
             warehouse_options = [str(number) for id, number in warehouses]
             warehouse_ids = {str(number): id for id, number in warehouses}
 
-            # Создаем элементы формы с выпадающими списками
             row = 0
             
-            # Склад
             Label(edit_window, text="Номер склада:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
-            warehouse_var = StringVar(value=str(detail_data[10]))  # warehouse_number
+            warehouse_var = StringVar(value=str(detail_data[10]))   
             warehouse_combobox = ttk.Combobox(edit_window, textvariable=warehouse_var, 
                                             values=warehouse_options, state="readonly")
             warehouse_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
-            # Комната
             Label(edit_window, text="Номер комнаты:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
-            room_var = StringVar(value=str(detail_data[8]))  # room_number
+            room_var = StringVar(value=str(detail_data[8]))  
             room_combobox = ttk.Combobox(edit_window, textvariable=room_var, 
                                         values=[], state="readonly")
             room_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
-            # Стеллаж
             Label(edit_window, text="Номер стеллажа:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
-            rack_var = StringVar(value=str(detail_data[6]))  # rack_number
+            rack_var = StringVar(value=str(detail_data[6]))
             rack_combobox = ttk.Combobox(edit_window, textvariable=rack_var, 
                                         values=[], state="readonly")
             rack_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
-            # Полка
             Label(edit_window, text="Номер полки:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
-            shelf_var = StringVar(value=str(detail_data[4]))  # shelf_number
+            shelf_var = StringVar(value=str(detail_data[4]))
             shelf_combobox = ttk.Combobox(edit_window, textvariable=shelf_var, 
                                         values=[], state="readonly")
             shelf_combobox.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
-            # Тип детали
             Label(edit_window, text="Тип детали:").grid(row=row, column=0, padx=5, pady=5, sticky=W)
-            type_var = StringVar(value=detail_data[1])  # type_detail
+            type_var = StringVar(value=detail_data[1]) 
             type_entry = Entry(edit_window, textvariable=type_var)
             type_entry.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
             
-            # Вес
             Label(edit_window, text="Вес (кг):").grid(row=row, column=0, padx=5, pady=5, sticky=W)
-            weight_var = StringVar(value=str(detail_data[2]))  # weight
+            weight_var = StringVar(value=str(detail_data[2]))
             weight_entry = Entry(edit_window, textvariable=weight_var)
             weight_entry.grid(row=row, column=1, padx=5, pady=5, sticky=EW)
             row += 1
 
-            # Функции для обновления зависимых списков
             def update_rooms(event=None):
                 selected_warehouse = warehouse_var.get()
                 if selected_warehouse in warehouse_ids:
@@ -3155,7 +2899,6 @@ class WarehouseApp(WindowApp):
                         rooms = self.cursor.fetchall()
                         room_combobox['values'] = [str(number) for id, number in rooms]
                         
-                        # Устанавливаем текущее значение комнаты, если оно есть в списке
                         current_room = str(detail_data[8])
                         if current_room in [str(number) for id, number in rooms]:
                             room_var.set(current_room)
@@ -3187,7 +2930,6 @@ class WarehouseApp(WindowApp):
                         racks = self.cursor.fetchall()
                         rack_combobox['values'] = [str(number) for id, number in racks]
                         
-                        # Устанавливаем текущее значение стеллажа, если оно есть в списке
                         current_rack = str(detail_data[6])
                         if current_rack in [str(number) for id, number in racks]:
                             rack_var.set(current_rack)
@@ -3223,7 +2965,6 @@ class WarehouseApp(WindowApp):
                         shelves = self.cursor.fetchall()
                         shelf_combobox['values'] = [str(number) for id, number in shelves]
                         
-                        # Устанавливаем текущее значение полки, если оно есть в списке
                         current_shelf = str(detail_data[4])
                         if current_shelf in [str(number) for id, number in shelves]:
                             shelf_var.set(current_shelf)
@@ -3236,23 +2977,19 @@ class WarehouseApp(WindowApp):
                 else:
                     shelf_combobox['values'] = []
 
-            # Привязываем обработчики изменений
             warehouse_combobox.bind("<<ComboboxSelected>>", update_rooms)
             room_combobox.bind("<<ComboboxSelected>>", update_racks)
             rack_combobox.bind("<<ComboboxSelected>>", update_shelves)
 
-            # Инициализируем данные сразу после создания формы
             update_rooms()
             
             def save_changes():
                 try:
-                    # Проверяем, что все поля заполнены
                     if not all([warehouse_var.get(), room_var.get(), 
                             rack_var.get(), shelf_var.get(), 
                             type_var.get(), weight_var.get()]):
                         raise ValueError("Все поля должны быть заполнены")
                     
-                    # Получаем ID новой полки
                     self.cursor.execute("""
                         SELECT shelf_id FROM shelf 
                         WHERE shelf_number = %s AND rackID = (
@@ -3272,7 +3009,6 @@ class WarehouseApp(WindowApp):
                         raise ValueError("Полка не найдена в базе данных")
                     new_shelf_id = shelf_data[0]
                     
-                    # Проверяем вес
                     try:
                         weight = float(weight_var.get())
                         if weight <= 0.0:
@@ -3280,8 +3016,7 @@ class WarehouseApp(WindowApp):
                     except ValueError as e:
                         raise ValueError("Вес должен быть числом (например, 2.1)")
                     
-                    # Проверка количества деталей на новой полке (если полка изменилась)
-                    if new_shelf_id != detail_data[3]:  # Если полка изменилась
+                    if new_shelf_id != detail_data[3]:   
                         self.cursor.execute("""
                             SELECT COUNT(*) FROM details WHERE shelfid = %s
                         """, (new_shelf_id,))
@@ -3290,7 +3025,6 @@ class WarehouseApp(WindowApp):
                         if details_count >= 5:
                             raise ValueError(f"На новой полке уже {details_count} деталей. Максимум - 5.")
 
-                    # Обновляем деталь
                     self.cursor.execute("""
                         UPDATE details 
                         SET shelfid = %s, type_detail = %s, weight = %s
@@ -3307,7 +3041,6 @@ class WarehouseApp(WindowApp):
                     self.conn.rollback()
                     messagebox.showerror("Ошибка", f"Не удалось обновить деталь: {str(e)}")
             
-            # Кнопка сохранения
             Button(edit_window, text="Сохранить", command=save_changes).grid(
                 row=row, column=0, columnspan=2, pady=10)
                 
@@ -3324,7 +3057,6 @@ class WarehouseApp(WindowApp):
         item = self.warehouse_tree.item(selected[0])
         detail_id = item['values'][0]
         
-        # Check if detail is referenced in any invoices
         self.cursor.execute("SELECT COUNT(*) FROM invoice_detail WHERE detailid = %s", (detail_id,))
         reference_count = self.cursor.fetchone()[0]
         
@@ -3339,7 +3071,6 @@ class WarehouseApp(WindowApp):
                 self.conn.commit()
                 self.load_warehouse()
                 
-                # Проверяем, стала ли таблица пустой после удаления
                 if len(self.warehouse_tree.get_children()) == 0 and self.current_search_conditions['warehouse']:
                     messagebox.showinfo("Информация", "Таблица пуста. Сброс условий поиска.")
                     self.current_search_conditions['warehouse'] = None
@@ -3350,7 +3081,6 @@ class WarehouseApp(WindowApp):
                 self.conn.rollback()
                 messagebox.showerror("Ошибка", f"Не удалось удалить деталь: {str(e)}")
     
-    # Методы для работы с контрагентами
     def add_counteragent(self):
         """Добавление нового контрагента"""
         if not self.can_edit_counteragents:
@@ -3360,7 +3090,6 @@ class WarehouseApp(WindowApp):
             add_window = Toplevel(self.root)
             add_window.title("Добавить контрагента")
             
-            # Создаем элементы формы
             Label(add_window, text="Название:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
             name_entry = Entry(add_window)
             name_entry.grid(row=0, column=1, padx=5, pady=5, sticky=EW)
@@ -3416,7 +3145,6 @@ class WarehouseApp(WindowApp):
         counteragent_id = item['values'][0]
         
         try:
-            # Получаем данные о контрагенте
             self.cursor.execute("SELECT * FROM counteragent WHERE counteragent_id = %s", (counteragent_id,))
             counteragent_data = self.cursor.fetchone()
             
@@ -3427,7 +3155,6 @@ class WarehouseApp(WindowApp):
             edit_window = Toplevel(self.root)
             edit_window.title("Редактировать контрагента")
             
-            # Создаем элементы формы с текущими значениями
             Label(edit_window, text="Название:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
             name_entry = Entry(edit_window)
             name_entry.insert(0, counteragent_data[1])
@@ -3496,7 +3223,6 @@ class WarehouseApp(WindowApp):
                 self.conn.commit()
                 self.load_counteragents()
                 
-                # Проверяем, стала ли таблица пустой после удаления
                 if len(self.counteragent_tree.get_children()) == 0 and self.current_search_conditions['counteragent']:
                     messagebox.showinfo("Информация", "Таблица пуста. Сброс условий поиска.")
                     self.current_search_conditions['counteragent'] = None
@@ -3507,7 +3233,6 @@ class WarehouseApp(WindowApp):
                 self.conn.rollback()
                 messagebox.showerror("Ошибка", f"Не удалось удалить контрагента: {str(e)}")
     
-    # Методы для работы с сотрудниками
     def add_employee(self):
         """Добавление нового сотрудника"""
         if not self.can_edit_employees:
@@ -3517,7 +3242,6 @@ class WarehouseApp(WindowApp):
             add_window = Toplevel(self.root)
             add_window.title("Добавить сотрудника")
             
-            # Создаем элементы формы
             Label(add_window, text="Роль:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
             role_var = StringVar()
             role_combobox = ttk.Combobox(add_window, textvariable=role_var, 
@@ -3575,7 +3299,6 @@ class WarehouseApp(WindowApp):
         employee_id = item['values'][0]
         
         try:
-            # Получаем данные о сотруднике
             self.cursor.execute("SELECT * FROM employee WHERE employee_id = %s", (employee_id,))
             employee_data = self.cursor.fetchone()
             
@@ -3586,7 +3309,6 @@ class WarehouseApp(WindowApp):
             edit_window = Toplevel(self.root)
             edit_window.title("Редактировать сотрудника")
             
-            # Создаем элементы формы с текущими значениями
             Label(edit_window, text="Роль:").grid(row=0, column=0, padx=5, pady=5, sticky=W)
             role_var = StringVar()
             role_combobox = ttk.Combobox(edit_window, textvariable=role_var, 
@@ -3657,7 +3379,6 @@ class WarehouseApp(WindowApp):
                 self.conn.commit()
                 self.load_employees()
                 
-                # Проверяем, стала ли таблица пустой после удаления
                 if len(self.employee_tree.get_children()) == 0 and self.current_search_conditions['employee']:
                     messagebox.showinfo("Информация", "Таблица пуста. Сброс условий поиска.")
                     self.current_search_conditions['employee'] = None
